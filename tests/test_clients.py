@@ -5,6 +5,7 @@ Tests for API clients (unit tests with basic validation).
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 from clients.gamma_client import GammaClient
 from clients.trades_client import TradesClient
 from clients.leaderboard_client import LeaderboardClient
@@ -85,7 +86,10 @@ class TestLeaderboardClient:
         client = LeaderboardClient()
         assert client.BASE_URL == "https://polymarket.com"
         assert len(client.API_ENDPOINTS) == 3
-        assert "gamma-api.polymarket.com" in client.API_ENDPOINTS[0]
+        # Use proper URL parsing to avoid substring sanitization issues
+        parsed = urlparse(client.API_ENDPOINTS[0])
+        assert parsed.hostname == "gamma-api.polymarket.com"
+        assert parsed.scheme == "https"
     
     def test_parse_api_response_list(self):
         """Test parsing API response when data is a list."""
