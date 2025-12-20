@@ -23,6 +23,7 @@ st.set_page_config(
 # Import modules
 from clients.gamma_client import GammaClient
 from clients.trades_client import TradesClient
+from clients.api_pool import fetch_all_data, APIPool
 from utils.user_tracker import get_user_tracker
 from algorithms.conviction_scorer import ConvictionScorer
 
@@ -195,22 +196,28 @@ def display_conviction_dashboard():
         st.warning("⚠️ No tracked users! Add traders to `tracked_users.csv`")
         return
     
-    # Load and score trades (last 24 hours)
-    with st.spinner("Analyzing tracked trader activity..."):
-        trades = load_tracked_trades("Last 24 hours")
+    wallet_addresses = tracker.get_wallet_addresses()
+    logger.info(f"Tracking {len(wallet_addresses)} wallets: {wallet_addresses[:3]}...")
+    
+    # Phase 1: Load trades with high-performance pool
+    with st.spinner("Loading trader activity..."):
+        # First fetch trades to get market slugs
+        trades, _ = fetch_all_data(wallet_addresses, [], cutoff_minutes=1440)
+        
+        logger.info(f"Loaded {len(trades)} trades from API")
         
         if not trades:
             st.info("No recent activity from tracked users in the last 24 hours.")
             return
         
         # Score markets
-        scorer = ConvictionScorer(tracker.get_wallet_addresses())
+        scorer = ConvictionScorer(wallet_addresses)
         scored_markets = scorer.score_markets(trades)
     
-    # Fetch market data for all markets in parallel
-    with st.spinner("Fetching current market prices..."):
+    # Phase 2: Fetch all market data in parallel
+    with st.spinner("Fetching current prices..."):
         market_slugs = [m['slug'] for m in scored_markets]
-        batch_market_data = get_batch_market_data(market_slugs)
+        _, batch_market_data = fetch_all_data([], market_slugs, cutoff_minutes=1440)
     
     # Filter out closed markets
     open_markets = [
@@ -237,6 +244,51 @@ def display_conviction_dashboard():
     
     for market in open_markets:
         display_market_card(market, batch_market_data)
+
+
+def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
+    """
+    Calculate user positions (average price and total size) for one side.
+    
+    Args:
+        trades: List of all trades for the market
+        is_yes_side: True for YES side, False for NO side
+        
+    Returns:
+        List of tuples: (user_name, avg_price, total_size)
+    """
+    from collections import defaultdict
+    
+    user_positions = defaultdict(lambda: {'total_volume': 0, 'total_size': 0, 'weighted_sum': 0})
+    
+    for trade in trades:
+        side = trade.get('side', '').upper()
+        outcome = trade.get('outcome', '').upper()
+        wallet = trade.get('proxyWallet', '').lower()
+        
+        is_bullish = (side == 'BUY' and 'YES' in outcome) or (side == 'SELL' and 'NO' in outcome)
+        is_bearish = (side == 'BUY' and 'NO' in outcome) or (side == 'SELL' and 'YES' in outcome)
+        
+        if (is_yes_side and is_bullish) or (not is_yes_side and is_bearish):
+            price = float(trade.get('price', 0))
+            size = float(trade.get('size', 0))
+            volume = price * size
+            
+            user_positions[wallet]['weighted_sum'] += price * volume
+            user_positions[wallet]['total_volume'] += volume
+            user_positions[wallet]['total_size'] += size
+    
+    # Convert to list with names and calculated averages
+    result = []
+    for wallet, data in user_positions.items():
+        user_name = tracker.get_user_name(wallet)
+        avg_price = data['weighted_sum'] / data['total_volume'] if data['total_volume'] > 0 else 0
+        total_size = data['total_size']
+        result.append((user_name, avg_price, total_size))
+    
+    # Sort by total size (largest positions first)
+    result.sort(key=lambda x: x[2], reverse=True)
+    return result
 
 
 def calculate_side_prices(trades: List[Dict], is_yes_side: bool) -> Tuple[float, float]:
@@ -330,7 +382,23 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
     
     with col1:
         st.markdown(f"**[{slug[:80]}]({market_url})**")
-        st.caption(f"👥 {users_display} • {direction_emoji} {direction}")
+        # Display user positions for YES side
+        yes_positions = get_user_positions(market['trades'], is_yes_side=True)
+        no_positions = get_user_positions(market['trades'], is_yes_side=False)
+        
+        # Build user position display with one line per user
+        positions_html = '<div style="font-size: 0.75rem; line-height: 1.4; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', sans-serif; color: #5a6c7d;">'
+        
+        if yes_positions:
+            for name, price, size in yes_positions[:5]:  # Show up to 5 users
+                positions_html += f'<div style="margin: 0.1rem 0;">🟢 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+        
+        if no_positions:
+            for name, price, size in no_positions[:5]:  # Show up to 5 users
+                positions_html += f'<div style="margin: 0.1rem 0;">🔴 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+        
+        positions_html += '</div>'
+        st.markdown(positions_html, unsafe_allow_html=True)
     
     with col2:
         st.markdown(f"<span style='font-size: 0.85rem;'><strong>{level_name}</strong></span>", unsafe_allow_html=True)
@@ -338,7 +406,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
     
     with col3:
         # YES position with avg/last prices
-        yes_bg = "rgba(56, 239, 125, 0.15)" if direction == "BULLISH" else "rgba(0,0,0,0.02)"
+        yes_bg = "rgba(56, 239, 125, 0.1)"
         st.markdown(f"""
         <div style="background: {yes_bg}; padding: 0.3rem; border-radius: 0.3rem;">
             <div style="text-align: center; margin-bottom: 0.2rem;">
@@ -358,7 +426,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
     
     with col4:
         # NO position with avg/last prices
-        no_bg = "rgba(244, 92, 67, 0.15)" if direction == "BEARISH" else "rgba(0,0,0,0.02)"
+        no_bg = "rgba(244, 92, 67, 0.1)"
         st.markdown(f"""
         <div style="background: {no_bg}; padding: 0.3rem; border-radius: 0.3rem;">
             <div style="text-align: center; margin-bottom: 0.2rem;">
