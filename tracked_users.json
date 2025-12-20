@@ -1,12 +1,16 @@
 {
   "tracked_users": [
     {
-      "name": "Trader Alpha",
-      "wallet": "0x1234567890abcdef1234567890abcdef12345678"
+      "name": "Bass",
+      "wallet": "0x596422bcdd897703b96f4f931961b181b79d35df"
     },
     {
-      "name": "Trader Beta",
-      "wallet": "0xabcdef1234567890abcdef1234567890abcdef12"
+      "name": "scottilicious",
+      "wallet": "0x000d257d2dc7616feaef4ae0f14600fdf50a758e"
+    },
+    {
+      "name": "swisstony",
+      "wallet": "0x204f72f35326db932158cba6adff0b9a1da95e14"
     }
   ]
 }
