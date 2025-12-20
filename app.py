@@ -468,7 +468,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
                 <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
                 <div style="font-size: 1.3rem; font-weight: 700; color: #38ef7d; line-height: 1;">{yes_price:.1%}</div>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; line-height: 1.1;">
                 <span style="font-weight: 600;">👥 {yes_traders}</span>
                 <span style="color: #7f8c8d;">${market['bullish_volume']:,.0f}</span>
             </div>
@@ -484,7 +484,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
                 <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
                 <div style="font-size: 1.3rem; font-weight: 700; color: #f45c43; line-height: 1;">{no_price:.1%}</div>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; line-height: 1.1;">
                 <span style="font-weight: 600;">👥 {no_traders}</span>
                 <span style="color: #7f8c8d;">${market['bearish_volume']:,.0f}</span>
             </div>
