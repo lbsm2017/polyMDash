@@ -236,15 +236,17 @@ def display_conviction_dashboard():
     with col_sort:
         sort_by = st.selectbox(
             "Sort by:",
-            ["Recent Activity", "Total Volume", "Number of Traders"],
+            ["Recent Activity", "Conviction", "Volume ($)", "Number of Trades"],
             key="market_sort"
         )
     
     # Apply sorting
-    if sort_by == "Total Volume":
+    if sort_by == "Conviction":
+        open_markets.sort(key=lambda x: x['conviction_score'], reverse=True)
+    elif sort_by == "Volume ($)":
         open_markets.sort(key=lambda x: x['bullish_volume'] + x['bearish_volume'], reverse=True)
-    elif sort_by == "Number of Traders":
-        open_markets.sort(key=lambda x: len(x['bullish_users']) + len(x['bearish_users']), reverse=True)
+    elif sort_by == "Number of Trades":
+        open_markets.sort(key=lambda x: x['total_trades'], reverse=True)
     # else: Recent Activity is already sorted by weighted_avg_time from ConvictionScorer
     
     # Table header
