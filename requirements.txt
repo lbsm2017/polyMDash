@@ -18,9 +18,6 @@ requests>=2.31.0
 plotly>=5.17.0
 altair>=5.1.0
 
-# Database
-sqlite3  # Built-in with Python
-
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.5.0
