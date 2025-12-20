@@ -1,0 +1,31 @@
+# Polymarket Dashboard Requirements
+# Python 3.9+
+
+# Core dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# API clients
+aiohttp>=3.9.0
+websockets>=12.0
+requests>=2.31.0
+
+# Optional: Polymarket SDK
+# polymarket-gamma>=0.1.0
+
+# Data visualization
+plotly>=5.17.0
+altair>=5.1.0
+
+# Database
+sqlite3  # Built-in with Python
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# Development
+pytest>=7.4.0
+black>=23.12.0
+flake8>=6.1.0

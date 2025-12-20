@@ -1,0 +1,12 @@
+{
+  "tracked_users": [
+    {
+      "name": "Trader Alpha",
+      "wallet": "0x1234567890abcdef1234567890abcdef12345678"
+    },
+    {
+      "name": "Trader Beta",
+      "wallet": "0xabcdef1234567890abcdef1234567890abcdef12"
+    }
+  ]
+}
