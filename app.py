@@ -219,14 +219,15 @@ def display_conviction_dashboard():
         market_slugs = [m['slug'] for m in scored_markets]
         _, batch_market_data = fetch_all_data([], market_slugs, cutoff_minutes=1440)
     
-    # Filter out closed markets
+    # Filter out closed markets and markets without tracked user positions
     open_markets = [
         market for market in scored_markets 
         if batch_market_data.get(market['slug']) is not None
+        and (len(market['bullish_users']) > 0 or len(market['bearish_users']) > 0)
     ]
     
     if not open_markets:
-        st.info("No open markets found. All markets with activity are currently closed.")
+        st.info("No open markets found with tracked user positions.")
         return
     
     # Sorting controls
