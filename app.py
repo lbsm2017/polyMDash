@@ -265,6 +265,31 @@ def display_conviction_dashboard():
         display_market_card(market, batch_market_data)
 
 
+def format_time_elapsed(minutes: int) -> str:
+    """
+    Format elapsed time in a human-readable format.
+    
+    - < 60m: Xm
+    - 60m - 24h: XhYm
+    - 24h - 30d: XdYh
+    - > 30d: XMYd
+    """
+    if minutes < 60:
+        return f"{minutes}m"
+    elif minutes < 1440:  # Less than 24 hours
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours}h{mins}m"
+    elif minutes < 43200:  # Less than 30 days
+        days = minutes // 1440
+        hours = (minutes % 1440) // 60
+        return f"{days}d{hours}h"
+    else:  # 30 days or more
+        months = minutes // 43200
+        days = (minutes % 43200) // 1440
+        return f"{months}M{days}d"
+
+
 def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
     """
     Calculate user positions (average price and total size) for one side.
@@ -418,13 +443,15 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         
         if yes_positions:
             for name, price, size, minutes_ago in yes_positions[:5]:  # Show up to 5 users
+                time_str = format_time_elapsed(minutes_ago)
                 time_color = "#27ae60" if minutes_ago < 60 else "#95a5a6" if minutes_ago < 360 else "#7f8c8d"
-                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{minutes_ago}m]</span> 🟢 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{time_str}]</span> 🟢 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
         
         if no_positions:
             for name, price, size, minutes_ago in no_positions[:5]:  # Show up to 5 users
+                time_str = format_time_elapsed(minutes_ago)
                 time_color = "#e74c3c" if minutes_ago < 60 else "#95a5a6" if minutes_ago < 360 else "#7f8c8d"
-                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{minutes_ago}m]</span> 🔴 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{time_str}]</span> 🔴 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
         
         positions_html += '</div>'
         st.markdown(positions_html, unsafe_allow_html=True)
