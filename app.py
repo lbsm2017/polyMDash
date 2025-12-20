@@ -33,50 +33,48 @@ tracker = get_user_tracker()
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.2rem;
-        font-weight: bold;
-        color: #1a1a2e;
-        margin-bottom: 0.5rem;
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin-bottom: 0.3rem;
+        margin-top: 0;
     }
-    .market-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 1rem;
-        margin: 1rem 0;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    }
-    .market-card.bullish {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-    }
-    .market-card.bearish {
-        background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
-    }
-    .conviction-badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 1rem;
-        font-weight: bold;
-        font-size: 0.9rem;
-        background: rgba(255,255,255,0.2);
-    }
-    .consensus-indicator {
-        font-size: 1.5rem;
-        font-weight: bold;
-    }
-    .price-box {
-        background: rgba(255,255,255,0.15);
-        padding: 0.75rem;
-        border-radius: 0.5rem;
+    .compact-metric {
         text-align: center;
+        padding: 0.5rem;
+        background: #f8f9fa;
+        border-radius: 0.3rem;
+        border-left: 3px solid #3498db;
     }
-    .user-chip {
-        display: inline-block;
-        background: rgba(255,255,255,0.25);
-        padding: 0.2rem 0.6rem;
-        border-radius: 1rem;
-        margin: 0.2rem;
-        font-size: 0.85rem;
+    .metric-value {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin: 0;
+    }
+    .metric-label {
+        font-size: 0.75rem;
+        color: #7f8c8d;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin: 0;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.2rem;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.7rem;
+    }
+    .market-row {
+        padding: 0.4rem 0;
+        border-bottom: 1px solid #ecf0f1;
+    }
+    .market-row:hover {
+        background-color: #f8f9fa;
+    }
+    h3 {
+        margin-top: 0.5rem;
+        margin-bottom: 0.3rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -123,7 +121,10 @@ def main():
     
     st.sidebar.markdown("---")
     
-    if st.sidebar.button("🔄 Refresh", use_container_width=True):
+    # Auto-refresh
+    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (30s)", value=True)
+    
+    if st.sidebar.button("🔄 Refresh Now", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
     
@@ -135,12 +136,18 @@ def main():
         min_conviction=min_conviction,
         min_consensus=min_consensus
     )
+    
+    # Auto-refresh logic
+    if auto_refresh:
+        import time
+        time.sleep(30)
+        st.rerun()
 
 
 def display_conviction_dashboard(time_window: str, min_conviction: str, min_consensus: int):
     """Main dashboard view showing conviction-weighted markets."""
     
-    st.markdown('<h1 class="main-header">🎯 High Conviction Signals</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🎯 High Conviction Signals</div>', unsafe_allow_html=True)
     
     tracked_users = tracker.get_all_users()
     if not tracked_users:
@@ -170,33 +177,38 @@ def display_conviction_dashboard(time_window: str, min_conviction: str, min_cons
             if m['conviction_score'] >= min_score and m['consensus_count'] >= min_consensus
         ]
     
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🎯 Signals", len(filtered_markets))
-    with col2:
-        bullish = sum(1 for m in filtered_markets if m['direction'] == 'BULLISH')
-        st.metric("📈 Bullish", bullish)
-    with col3:
-        bearish = sum(1 for m in filtered_markets if m['direction'] == 'BEARISH')
-        st.metric("📉 Bearish", bearish)
-    with col4:
-        total_vol = sum(m['bullish_volume'] + m['bearish_volume'] for m in filtered_markets)
-        st.metric("💰 Total Volume", f"${total_vol:,.0f}")
+    # Filter out closed markets by checking market data
+    open_markets = []
+    for market in filtered_markets:
+        market_data = get_market_data(market['slug'])
+        if market_data is not None:  # None means market is closed/inactive
+            open_markets.append(market)
     
-    st.markdown("---")
-    
-    # Display markets
-    if not filtered_markets:
-        st.info("No markets match your filters. Try lowering conviction threshold or expanding time window.")
+    if not open_markets:
+        st.info("No open markets found. All markets with activity are currently closed.")
         return
+    
+    # Table header
+    st.markdown("### 📊 Markets by Conviction")
+    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3, 1, 1, 1.5, 1.5])
+    with header_col1:
+        st.markdown("**Market**")
+    with header_col2:
+        st.markdown("**Conviction**")
+    with header_col3:
+        st.markdown("**Consensus**")
+    with header_col4:
+        st.markdown("**YES Position**")
+    with header_col5:
+        st.markdown("**NO Position**")
+    st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
     for market in filtered_markets:
         display_market_card(market)
 
 
 def display_market_card(market: Dict):
-    """Display a single market conviction card."""
+    """Display a single market in compact tabular format."""
     
     direction = market['direction']
     score = market['conviction_score']
@@ -206,72 +218,67 @@ def display_market_card(market: Dict):
     scorer = ConvictionScorer([])
     level_name, emoji = scorer.get_conviction_level(score)
     
-    # Card styling
-    card_class = "bullish" if direction == "BULLISH" else "bearish"
+    # Direction styling
     direction_emoji = "📈" if direction == "BULLISH" else "📉"
+    direction_color = "#38ef7d" if direction == "BULLISH" else "#f45c43"
     
     # Fetch current market prices
     market_data = get_market_data(slug)
     yes_price = market_data.get('yes_price', 0.5) if market_data else 0.5
     no_price = market_data.get('no_price', 0.5) if market_data else 0.5
     
-    with st.container():
-        # Header row
-        col1, col2, col3 = st.columns([4, 1, 1])
-        
-        with col1:
-            st.markdown(f"### {direction_emoji} {slug[:100]}")
-            
-            # Consensus users
-            user_chips = ""
-            for wallet in market['consensus_users'][:5]:
-                name = tracker.get_user_name(wallet)
-                user_chips += f'<span class="user-chip">👤 {name}</span> '
-            
-            st.markdown(f"""
-            <div>
-                <span class="conviction-badge">{level_name}</span>
-                <span style="margin-left: 1rem;">
-                    👥 <strong>{market['consensus_count']}</strong> traders agree
-                </span>
-            </div>
-            <div style="margin-top: 0.5rem">{user_chips}</div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(f"""
-            <div class="price-box">
-                <div style="font-size: 0.8rem; opacity: 0.8;">YES</div>
-                <div style="font-size: 1.5rem; font-weight: bold;">{yes_price:.0%}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown(f"""
-            <div class="price-box">
-                <div style="font-size: 0.8rem; opacity: 0.8;">NO</div>
-                <div style="font-size: 1.5rem; font-weight: bold;">{no_price:.0%}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Volume breakdown
+    # Create market URL - Polymarket uses /market/ path with slug
+    market_url = f"https://polymarket.com/market/{slug}"
+    
+    # Consensus users
+    user_names = [tracker.get_user_name(w) for w in market['consensus_users'][:3]]
+    users_display = ", ".join(user_names)
+    if len(market['consensus_users']) > 3:
+        users_display += f" +{len(market['consensus_users']) - 3}"
+    
+    # Count YES and NO positions
+    yes_traders = len(market['bullish_users'])
+    no_traders = len(market['bearish_users'])
+    
+    # Create compact row with container
+    st.markdown('<div class="market-row">', unsafe_allow_html=True)
+    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1.5, 1.5])
+    
+    with col1:
+        st.markdown(f"**[{slug[:80]}]({market_url})**")
+        st.caption(f"👥 {users_display}")
+    
+    with col2:
+        st.markdown(f"<span style='font-size: 0.85rem;'><strong>{level_name}</strong></span>", unsafe_allow_html=True)
+        st.caption(f"Score: {score:.1f}")
+    
+    with col3:
+        st.markdown(f"<span style='font-size: 0.85rem;'><strong>{market['consensus_count']}</strong> traders</span>", unsafe_allow_html=True)
+        st.caption(f"{direction_emoji} {direction}")
+    
+    with col4:
+        # YES position
+        yes_bg = "rgba(56, 239, 125, 0.15)" if direction == "BULLISH" else "rgba(0,0,0,0.02)"
         st.markdown(f"""
-        **Volume:** 📈 ${market['bullish_volume']:,.0f} bullish · 
-        📉 ${market['bearish_volume']:,.0f} bearish · 
-        🔄 {market['total_trades']} trades
-        """)
-        
-        # Recent trades expandable
-        with st.expander(f"📋 View {market['total_trades']} trades"):
-            trades_sorted = sorted(
-                market['trades'], 
-                key=lambda x: x.get('timestamp', 0), 
-                reverse=True
-            )
-            for trade in trades_sorted[:10]:
-                display_trade_row(trade)
-        
-        st.markdown("---")
+        <div style="background: {yes_bg}; padding: 0.3rem; border-radius: 0.3rem; text-align: center;">
+            <div style="font-size: 0.65rem; opacity: 0.7;">YES {yes_price:.0%}</div>
+            <div style="font-size: 0.95rem; font-weight: 600; color: #38ef7d;">👥 {yes_traders}</div>
+            <div style="font-size: 0.65rem; color: #7f8c8d;">${market['bullish_volume']:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        # NO position
+        no_bg = "rgba(244, 92, 67, 0.15)" if direction == "BEARISH" else "rgba(0,0,0,0.02)"
+        st.markdown(f"""
+        <div style="background: {no_bg}; padding: 0.3rem; border-radius: 0.3rem; text-align: center;">
+            <div style="font-size: 0.65rem; opacity: 0.7;">NO {no_price:.0%}</div>
+            <div style="font-size: 0.95rem; font-weight: 600; color: #f45c43;">👥 {no_traders}</div>
+            <div style="font-size: 0.65rem; color: #7f8c8d;">${market['bearish_volume']:,.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def display_trade_row(trade: Dict):
@@ -329,6 +336,15 @@ def get_market_data(slug: str) -> Optional[Dict]:
             async with GammaClient() as client:
                 market = await client.get_market_by_slug(slug)
                 if market:
+                    # Check if market is closed
+                    is_closed = market.get('closed', False)
+                    is_active = market.get('active', True)
+                    
+                    # Filter out closed/inactive markets
+                    if is_closed or not is_active:
+                        logger.debug(f"Market {slug} is closed or inactive, skipping")
+                        return None
+                    
                     prices = market.get('outcomePrices', [0.5, 0.5])
                     if isinstance(prices, str):
                         import json
@@ -338,6 +354,8 @@ def get_market_data(slug: str) -> Optional[Dict]:
                         'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
                         'volume': market.get('volume', 0),
                         'liquidity': market.get('liquidity', 0),
+                        'active': is_active,
+                        'closed': is_closed,
                     }
             return None
         
