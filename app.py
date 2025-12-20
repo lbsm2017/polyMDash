@@ -83,8 +83,8 @@ def main():
     # Time window
     time_window = st.sidebar.selectbox(
         "Time Window",
-        ["Last 5 minutes", "Last 15 minutes", "Last hour", "Last 24 hours"],
-        index=1
+        ["Last 5 minutes", "Last 15 minutes", "Last hour", "Last 6 hours", "Last 24 hours"],
+        index=3  # Default to Last 6 hours
     )
     
     # Filters
@@ -256,7 +256,7 @@ def display_activity_feed(
         return
     
     # Group by market for better UX
-    view_mode = st.radio("View Mode", ["📊 By Trade", "🗂️ By Market"], horizontal=True)
+    view_mode = st.radio("View Mode", ["📊 By Trade", "🗂️ By Market"], horizontal=True, index=1)
     
     if view_mode == "📊 By Trade":
         display_trades_list(filtered, tracked_users)
@@ -320,44 +320,118 @@ def display_trades_list(trades: List[Dict], tracked_users: bool):
 
 
 def display_trades_by_market(trades: List[Dict], tracked_users: bool):
-    """Display trades grouped by market."""
+    """Display trades grouped by market and action."""
     
-    # Group by market
+    # Group by market and action
     markets = {}
     for trade in trades:
         slug = trade.get('slug', 'Unknown')
+        side = trade.get('side', 'UNKNOWN')
+        outcome = categorize_outcome(trade.get('outcome', ''))
+        
         if slug not in markets:
-            markets[slug] = []
-        markets[slug].append(trade)
+            markets[slug] = {
+                'BUY YES': [],
+                'BUY NO': [],
+                'SELL YES': [],
+                'SELL NO': [],
+                'OTHER': []
+            }
+        
+        action_key = f"{side} {outcome}"
+        if action_key in markets[slug]:
+            markets[slug][action_key].append(trade)
+        else:
+            markets[slug]['OTHER'].append(trade)
     
-    # Sort markets by number of trades
-    sorted_markets = sorted(markets.items(), key=lambda x: len(x[1]), reverse=True)
+    # Sort markets by total activity
+    def get_market_score(item):
+        slug, actions = item
+        total_trades = sum(len(trades) for trades in actions.values())
+        total_volume = sum(
+            float(t.get('price', 0)) * float(t.get('size', 0)) 
+            for trades in actions.values() 
+            for t in trades
+        )
+        return (total_trades, total_volume)
     
-    for market_slug, market_trades in sorted_markets[:20]:  # Top 20 markets
-        with st.expander(f"**{market_slug[:80]}...** ({len(market_trades)} trades)", expanded=False):
+    sorted_markets = sorted(markets.items(), key=get_market_score, reverse=True)
+    
+    # Display markets in compact format
+    for market_slug, actions in sorted_markets[:25]:  # Top 25 markets
+        total_trades = sum(len(trades) for trades in actions.values())
+        if total_trades == 0:
+            continue
+        
+        total_vol = sum(
+            float(t.get('price', 0)) * float(t.get('size', 0)) 
+            for trades in actions.values() 
+            for t in trades
+        )
+        
+        # Compact market header
+        with st.expander(
+            f"**{market_slug[:90]}** · {total_trades} trades · ${total_vol:.0f}",
+            expanded=False
+        ):
+            # Action breakdown in compact grid
+            action_order = ['BUY YES', 'BUY NO', 'SELL YES', 'SELL NO']
+            action_colors = {
+                'BUY YES': '🟢',
+                'BUY NO': '🔴', 
+                'SELL YES': '🔵',
+                'SELL NO': '🟣'
+            }
             
-            # Market summary
-            buys = len([t for t in market_trades if t.get('side') == 'BUY'])
-            sells = len([t for t in market_trades if t.get('side') == 'SELL'])
-            total_vol = sum(float(t.get('price', 0)) * float(t.get('size', 0)) for t in market_trades)
+            # Show action summary
+            cols = st.columns(4)
+            for i, action in enumerate(action_order):
+                trades_list = actions[action]
+                if trades_list:
+                    with cols[i]:
+                        emoji = action_colors.get(action, '⚪')
+                        vol = sum(float(t.get('price', 0)) * float(t.get('size', 0)) for t in trades_list)
+                        st.metric(
+                            f"{emoji} {action}",
+                            len(trades_list),
+                            f"${vol:.0f}"
+                        )
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🟢 BUYs", buys)
-            col2.metric("🔴 SELLs", sells)
-            col3.metric("Volume", f"${total_vol:.2f}")
+            st.markdown("---")
             
-            # Recent trades for this market
-            st.markdown("**Recent Trades:**")
-            for trade in market_trades[:10]:
-                side = trade.get('side')
-                outcome = categorize_outcome(trade.get('outcome', ''))
-                price = float(trade.get('price', 0))
-                size = float(trade.get('size', 0))
-                user = trade.get('proxyWallet', '')
-                user_name = tracker.get_user_name(user) if tracked_users else f"{user[:6]}...{user[-4:]}"
+            # Detailed trades by action
+            for action in action_order:
+                trades_list = actions[action]
+                if not trades_list:
+                    continue
                 
-                side_emoji = "🟢" if side == 'BUY' else "🔴"
-                st.caption(f"{side_emoji} {side} {outcome} · {price:.3f} × {size:.1f} · {user_name}")
+                emoji = action_colors.get(action, '⚪')
+                st.markdown(f"**{emoji} {action}** ({len(trades_list)} trades)")
+                
+                # Sort by timestamp desc
+                trades_list.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+                
+                for trade in trades_list[:5]:  # Top 5 per action
+                    price = float(trade.get('price', 0))
+                    size = float(trade.get('size', 0))
+                    volume = price * size
+                    user = trade.get('proxyWallet', '')
+                    user_name = tracker.get_user_name(user) if tracked_users else f"{user[:6]}...{user[-4:]}"
+                    timestamp = trade.get('timestamp', 0)
+                    
+                    if timestamp:
+                        dt = datetime.fromtimestamp(timestamp)
+                        time_ago = format_time_ago(dt)
+                    else:
+                        time_ago = ""
+                    
+                    st.caption(
+                        f"💰 ${volume:.2f} ({price:.3f} × {size:.0f}) · "
+                        f"👤 {user_name} · 🕒 {time_ago}"
+                    )
+                
+                if len(trades_list) > 5:
+                    st.caption(f"... and {len(trades_list) - 5} more")
 
 
 def categorize_outcome(outcome: str) -> str:
@@ -506,9 +580,10 @@ def parse_time_window(window: str) -> int:
         "Last 5 minutes": 5,
         "Last 15 minutes": 15,
         "Last hour": 60,
+        "Last 6 hours": 360,
         "Last 24 hours": 1440
     }
-    return mapping.get(window, 15)
+    return mapping.get(window, 360)
 
 
 if __name__ == "__main__":
