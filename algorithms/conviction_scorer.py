@@ -14,17 +14,20 @@ class ConvictionScorer:
     Scores market activity based on tracked user consensus and conviction.
     
     Key Signals:
-    - Multiple tracked users betting same direction = higher weight
-    - Large position sizes = higher conviction
-    - Extreme prices (>0.85 or <0.15) = strong directional bet
-    - Recent activity = more relevant
+    - Number of users agreeing on direction
+    - Total bet size vs baseline
+    - Bet size vs user's historical average
+    - Momentum (time clustering of trades)
+    - Recency decay
     """
     
     # Configurable weights
-    CONSENSUS_WEIGHT = 3.0      # Multiplier for each additional user agreeing
-    VOLUME_WEIGHT = 1.0         # Base weight for volume
-    EXTREME_PRICE_BONUS = 2.0   # Bonus for bets at extreme prices
-    RECENCY_DECAY_HOURS = 6     # Half-life for recency decay
+    USER_COUNT_WEIGHT = 2.0         # Weight per user agreeing
+    VOLUME_BASELINE = 1000          # Baseline volume for normalization
+    SIZE_VS_AVG_WEIGHT = 1.5        # Weight for bet size vs user average
+    MOMENTUM_WEIGHT = 2.0           # Weight for time clustering
+    RECENCY_DECAY_HOURS = 6         # Half-life for recency decay
+    MOMENTUM_WINDOW_HOURS = 1       # Time window for momentum clustering
     
     def __init__(self, tracked_wallets: List[str]):
         """
@@ -34,48 +37,69 @@ class ConvictionScorer:
             tracked_wallets: List of wallet addresses to track
         """
         self.tracked_wallets = set(w.lower() for w in tracked_wallets)
+        self.user_volume_history = defaultdict(list)  # Track per-user volumes
         
     def _is_tracked_user(self, wallet: str) -> bool:
         """Check if wallet belongs to a tracked user."""
         return wallet.lower() in self.tracked_wallets
     
-    def _compute_trade_conviction(self, trade: Dict) -> float:
+    def _update_user_history(self, wallet: str, volume: float):
+        """Update historical volume tracking for user."""
+        self.user_volume_history[wallet].append(volume)
+    
+    def _get_user_avg_volume(self, wallet: str) -> float:
+        """Get user's average volume. Returns baseline if no history."""
+        volumes = self.user_volume_history.get(wallet, [])
+        if not volumes:
+            return self.VOLUME_BASELINE
+        return sum(volumes) / len(volumes)
+    
+    def _calculate_momentum_score(self, trades: List[Dict]) -> float:
         """
-        Compute conviction score for a single trade.
-        
-        Factors:
-        - Volume (price × size)
-        - Price extremity (closer to 0 or 1 = higher conviction)
-        - Recency (exponential decay)
+        Calculate momentum score based on time clustering.
+        Higher score when trades happen close together in time.
         """
-        price = float(trade.get('price', 0.5))
-        size = float(trade.get('size', 0))
-        volume = price * size
-        timestamp = trade.get('timestamp', 0)
+        if len(trades) < 2:
+            return 0.0
         
-        # Base conviction from volume
-        conviction = math.log1p(volume) * self.VOLUME_WEIGHT
+        timestamps = sorted([t.get('timestamp', 0) for t in trades if t.get('timestamp')])
+        if not timestamps:
+            return 0.0
         
-        # Bonus for extreme prices (betting when confident)
-        price_extremity = abs(price - 0.5) * 2  # 0-1 scale, 1 = extreme
-        if price_extremity > 0.7:  # Price > 0.85 or < 0.15
-            conviction *= (1 + self.EXTREME_PRICE_BONUS * price_extremity)
+        # Count trades within momentum window
+        clustered_trades = 0
+        window_seconds = self.MOMENTUM_WINDOW_HOURS * 3600
         
-        # Recency decay
-        if timestamp:
-            try:
-                trade_dt = datetime.fromtimestamp(timestamp)
-                hours_ago = (datetime.now() - trade_dt).total_seconds() / 3600
-                recency_factor = math.exp(-hours_ago / self.RECENCY_DECAY_HOURS)
-                conviction *= recency_factor
-            except:
-                pass
+        for i in range(len(timestamps) - 1):
+            if timestamps[i + 1] - timestamps[i] <= window_seconds:
+                clustered_trades += 1
         
-        return conviction
+        # Momentum score: ratio of clustered trades
+        momentum = clustered_trades / (len(timestamps) - 1) if len(timestamps) > 1 else 0
+        return momentum
+    
+    def _calculate_recency_factor(self, timestamp: int) -> float:
+        """Calculate exponential decay based on time."""
+        if not timestamp:
+            return 0.5  # Default if no timestamp
+        
+        try:
+            trade_dt = datetime.fromtimestamp(timestamp)
+            hours_ago = (datetime.now() - trade_dt).total_seconds() / 3600
+            return math.exp(-hours_ago / self.RECENCY_DECAY_HOURS)
+        except:
+            return 0.5
     
     def score_markets(self, trades: List[Dict]) -> List[Dict]:
         """
         Score and rank markets by tracked user conviction.
+        
+        New scoring formula:
+        Score = (User Count × 2.0) 
+              + (Total Volume / $1000) 
+              + (Bet Size vs Avg Ratio × 1.5) 
+              + (Momentum Score × 2.0)
+              × Recency Decay
         
         Args:
             trades: List of trade dictionaries
@@ -83,15 +107,24 @@ class ConvictionScorer:
         Returns:
             List of market summaries sorted by conviction score
         """
-        # Group trades by market
+        # First pass: collect all user volumes for history
+        for trade in trades:
+            wallet = trade.get('proxyWallet', '').lower()
+            if self._is_tracked_user(wallet):
+                price = float(trade.get('price', 0))
+                size = float(trade.get('size', 0))
+                volume = price * size
+                self._update_user_history(wallet, volume)
+        
+        # Group trades by market and direction
         markets = defaultdict(lambda: {
             'trades': [],
-            'users_bullish': set(),    # Users betting YES
-            'users_bearish': set(),    # Users betting NO
+            'users_bullish': set(),
+            'users_bearish': set(),
             'bullish_volume': 0,
             'bearish_volume': 0,
-            'bullish_conviction': 0,
-            'bearish_conviction': 0,
+            'bullish_trades': [],
+            'bearish_trades': [],
             'last_activity': 0,
             'slug': '',
             'market_id': '',
@@ -100,7 +133,7 @@ class ConvictionScorer:
         for trade in trades:
             wallet = trade.get('proxyWallet', '').lower()
             
-            # Only count tracked users for consensus
+            # Only count tracked users
             if not self._is_tracked_user(wallet):
                 continue
                 
@@ -121,42 +154,50 @@ class ConvictionScorer:
             market['market_id'] = trade.get('market', '')
             market['trades'].append(trade)
             
-            # Track user positions
+            # Track user positions and direction-specific trades
             if is_bullish:
                 market['users_bullish'].add(wallet)
                 market['bullish_volume'] += volume
-                market['bullish_conviction'] += self._compute_trade_conviction(trade)
+                market['bullish_trades'].append(trade)
             elif is_bearish:
                 market['users_bearish'].add(wallet)
                 market['bearish_volume'] += volume
-                market['bearish_conviction'] += self._compute_trade_conviction(trade)
+                market['bearish_trades'].append(trade)
             
             # Track most recent activity
             if timestamp > market['last_activity']:
                 market['last_activity'] = timestamp
         
-        # Compute final scores with consensus weighting
+        # Compute final scores with new algorithm
         scored_markets = []
         for slug, market in markets.items():
             num_bullish = len(market['users_bullish'])
             num_bearish = len(market['users_bearish'])
             
-            # Consensus bonus: more users = exponentially higher score
-            bullish_consensus = 1 + (num_bullish - 1) * self.CONSENSUS_WEIGHT if num_bullish > 0 else 0
-            bearish_consensus = 1 + (num_bearish - 1) * self.CONSENSUS_WEIGHT if num_bearish > 0 else 0
+            # Calculate scores for both directions
+            bullish_score = self._calculate_direction_score(
+                market['bullish_trades'],
+                market['users_bullish'],
+                market['bullish_volume'],
+                market['last_activity']
+            )
             
-            final_bullish_score = market['bullish_conviction'] * bullish_consensus
-            final_bearish_score = market['bearish_conviction'] * bearish_consensus
+            bearish_score = self._calculate_direction_score(
+                market['bearish_trades'],
+                market['users_bearish'],
+                market['bearish_volume'],
+                market['last_activity']
+            )
             
             # Dominant direction
-            if final_bullish_score > final_bearish_score:
+            if bullish_score > bearish_score:
                 direction = 'BULLISH'
-                dominant_score = final_bullish_score
+                dominant_score = bullish_score
                 consensus_count = num_bullish
                 consensus_users = list(market['users_bullish'])
             else:
                 direction = 'BEARISH'
-                dominant_score = final_bearish_score
+                dominant_score = bearish_score
                 consensus_count = num_bearish
                 consensus_users = list(market['users_bearish'])
             
@@ -181,6 +222,61 @@ class ConvictionScorer:
         
         return scored_markets
     
+    def _calculate_direction_score(
+        self, 
+        trades: List[Dict], 
+        users: set, 
+        total_volume: float,
+        last_activity: int
+    ) -> float:
+        """
+        Calculate conviction score for one direction (bullish or bearish).
+        
+        Formula:
+        Score = (User Count × 2.0) 
+              + (Total Volume / $1000) 
+              + (Bet Size vs Avg Ratio × 1.5) 
+              + (Momentum Score × 2.0)
+              × Recency Decay
+        """
+        if not trades or not users:
+            return 0.0
+        
+        # Component 1: User count
+        user_count_score = len(users) * self.USER_COUNT_WEIGHT
+        
+        # Component 2: Total volume ratio
+        volume_score = total_volume / self.VOLUME_BASELINE
+        
+        # Component 3: Bet size vs user average
+        size_vs_avg_ratios = []
+        for trade in trades:
+            wallet = trade.get('proxyWallet', '').lower()
+            price = float(trade.get('price', 0))
+            size = float(trade.get('size', 0))
+            volume = price * size
+            
+            user_avg = self._get_user_avg_volume(wallet)
+            if user_avg > 0:
+                ratio = volume / user_avg
+                size_vs_avg_ratios.append(ratio)
+        
+        avg_ratio = sum(size_vs_avg_ratios) / len(size_vs_avg_ratios) if size_vs_avg_ratios else 1.0
+        size_score = avg_ratio * self.SIZE_VS_AVG_WEIGHT
+        
+        # Component 4: Momentum (time clustering)
+        momentum = self._calculate_momentum_score(trades)
+        momentum_score = momentum * self.MOMENTUM_WEIGHT
+        
+        # Combine all components
+        base_score = user_count_score + volume_score + size_score + momentum_score
+        
+        # Apply recency decay
+        recency_factor = self._calculate_recency_factor(last_activity)
+        final_score = base_score * recency_factor
+        
+        return final_score
+    
     def get_conviction_level(self, score: float) -> Tuple[str, str]:
         """
         Convert score to human-readable conviction level.
@@ -188,13 +284,13 @@ class ConvictionScorer:
         Returns:
             Tuple of (level_name, emoji)
         """
-        if score > 50:
+        if score > 15:
             return ("🔥 EXTREME", "🔥")
-        elif score > 20:
-            return ("💎 HIGH", "💎")
         elif score > 10:
-            return ("📈 MODERATE", "📈")
+            return ("💎 HIGH", "💎")
         elif score > 5:
+            return ("📈 MODERATE", "📈")
+        elif score > 2:
             return ("👀 LOW", "👀")
         else:
             return ("💤 MINIMAL", "💤")

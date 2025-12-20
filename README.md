@@ -60,8 +60,7 @@ Auto-refresh enabled by default (30s interval).
 Edit `tracked_users.csv` to modify tracked traders:
 ```csv
 name,address
-HolyMoses7,0xa4b366ad22fc0d06f1e934ff468e8922431a87b8
-Bass,0x596422bcdd897703b96f4f931961b181b79d35df
+User0001,0xa4b111ad22fc0d06f22234ff468e892243100000
 ```
 
 Tune algorithm weights in `algorithms/conviction_scorer.py`.

@@ -36,12 +36,12 @@ st.markdown("""
         font-size: 1.4rem;
         font-weight: 600;
         color: #2c3e50;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.2rem;
         margin-top: 0;
     }
     .compact-metric {
         text-align: center;
-        padding: 0.5rem;
+        padding: 0.3rem;
         background: #f8f9fa;
         border-radius: 0.3rem;
         border-left: 3px solid #3498db;
@@ -66,15 +66,19 @@ st.markdown("""
         font-size: 0.7rem;
     }
     .market-row {
-        padding: 0.4rem 0;
+        padding: 0.25rem 0;
         border-bottom: 1px solid #ecf0f1;
+        line-height: 1.2;
     }
     .market-row:hover {
         background-color: #f8f9fa;
     }
     h3 {
-        margin-top: 0.5rem;
-        margin-bottom: 0.3rem;
+        margin-top: 0.3rem;
+        margin-bottom: 0.2rem;
+    }
+    .stMarkdown {
+        margin-bottom: 0.2rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -88,36 +92,77 @@ def main():
     st.sidebar.markdown("Track high-conviction moves from top traders")
     st.sidebar.markdown("---")
     
-    # Time window
-    time_window = st.sidebar.selectbox(
-        "⏱️ Time Window",
-        ["Last 1 hour", "Last 6 hours", "Last 24 hours", "Last 3 days"],
-        index=1
-    )
-    
-    # Conviction filter
-    min_conviction = st.sidebar.select_slider(
-        "🎯 Min Conviction",
-        options=["All", "Low+", "Moderate+", "High+", "Extreme"],
-        value="All"
-    )
-    
-    # Consensus filter
-    min_consensus = st.sidebar.number_input(
-        "👥 Min Users Agreeing",
-        min_value=1,
-        max_value=10,
-        value=1,
-        help="Show markets where at least N tracked users agree"
-    )
-    
-    st.sidebar.markdown("---")
-    
-    # Tracked users display
+    # Tracked users display with edit capabilities
     tracked_users = tracker.get_all_users()
     st.sidebar.markdown(f"### 👥 Tracked Traders ({len(tracked_users)})")
+    
+    # Add custom CSS for compact trader list
+    st.sidebar.markdown("""
+    <style>
+        .trader-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.15rem 0.2rem;
+            margin: 0.1rem 0;
+            border-bottom: 1px solid #eee;
+        }
+        .trader-row:hover {
+            background-color: #f5f5f5;
+        }
+        .trader-name {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #333;
+            flex: 1;
+        }
+        .trader-remove {
+            font-size: 0.7rem;
+            color: #666;
+            cursor: pointer;
+            padding: 0.1rem 0.3rem;
+            border: none;
+            background: transparent;
+            text-align: center;
+        }
+        .trader-remove:hover {
+            color: #000;
+            background-color: #e0e0e0;
+            border-radius: 3px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Display each user with remove button in compact format
     for user in tracked_users:
-        st.sidebar.markdown(f"• **{user['name']}**")
+        col1, col2 = st.sidebar.columns([6, 1])
+        with col1:
+            st.markdown(f"<div style='font-size: 0.8rem; font-weight: 500; color: #333; line-height: 1.2; padding: 0.2rem 0;'>{user['name']}</div>", unsafe_allow_html=True)
+        with col2:
+            if st.button("×", key=f"remove_{user['wallet']}", help="Remove", type="secondary"):
+                tracker.remove_user(user['wallet'])
+                st.cache_data.clear()
+                st.rerun()
+    
+    # Add new user section
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**➕ Add New Trader**")
+    
+    with st.sidebar.form("add_user_form", clear_on_submit=True):
+        new_name = st.text_input("Name", placeholder="e.g., TraderName")
+        new_address = st.text_input("Wallet Address", placeholder="0x...")
+        submit = st.form_submit_button("Add Trader", use_container_width=True)
+        
+        if submit:
+            if new_name and new_address:
+                if tracker.add_user(new_name, new_address):
+                    st.success(f"Added {new_name}!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Wallet already tracked!")
+            else:
+                st.warning("Please fill in both fields")
     
     st.sidebar.markdown("---")
     
@@ -131,11 +176,7 @@ def main():
     st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
     
     # Main content
-    display_conviction_dashboard(
-        time_window=time_window,
-        min_conviction=min_conviction,
-        min_consensus=min_consensus
-    )
+    display_conviction_dashboard()
     
     # Auto-refresh logic
     if auto_refresh:
@@ -144,7 +185,7 @@ def main():
         st.rerun()
 
 
-def display_conviction_dashboard(time_window: str, min_conviction: str, min_consensus: int):
+def display_conviction_dashboard():
     """Main dashboard view showing conviction-weighted markets."""
     
     st.markdown('<div class="main-header">🎯 High Conviction Signals</div>', unsafe_allow_html=True)
@@ -154,32 +195,21 @@ def display_conviction_dashboard(time_window: str, min_conviction: str, min_cons
         st.warning("⚠️ No tracked users! Add traders to `tracked_users.csv`")
         return
     
-    # Load and score trades
+    # Load and score trades (last 24 hours)
     with st.spinner("Analyzing tracked trader activity..."):
-        trades = load_tracked_trades(time_window)
+        trades = load_tracked_trades("Last 24 hours")
         
         if not trades:
-            st.info("No recent activity from tracked users in this time window.")
+            st.info("No recent activity from tracked users in the last 24 hours.")
             return
         
         # Score markets
         scorer = ConvictionScorer(tracker.get_wallet_addresses())
         scored_markets = scorer.score_markets(trades)
-        
-        # Apply filters
-        conviction_thresholds = {
-            "All": 0, "Low+": 5, "Moderate+": 10, "High+": 20, "Extreme": 50
-        }
-        min_score = conviction_thresholds.get(min_conviction, 0)
-        
-        filtered_markets = [
-            m for m in scored_markets 
-            if m['conviction_score'] >= min_score and m['consensus_count'] >= min_consensus
-        ]
     
     # Filter out closed markets by checking market data
     open_markets = []
-    for market in filtered_markets:
+    for market in scored_markets:
         market_data = get_market_data(market['slug'])
         if market_data is not None:  # None means market is closed/inactive
             open_markets.append(market)
@@ -190,42 +220,33 @@ def display_conviction_dashboard(time_window: str, min_conviction: str, min_cons
     
     # Table header
     st.markdown("### 📊 Markets by Conviction")
-    header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns([3, 1, 1, 1, 1.5, 1.5])
+    header_col1, header_col2, header_col3, header_col4 = st.columns([3, 1, 2, 2])
     with header_col1:
         st.markdown("**Market**")
     with header_col2:
         st.markdown("**Conviction**")
     with header_col3:
-        st.markdown("**Avg Entry**")
+        st.markdown("**📈 YES Position**")
     with header_col4:
-        st.markdown("**Last Price**")
-    with header_col5:
-        st.markdown("**YES Position**")
-    with header_col6:
-        st.markdown("**NO Position**")
+        st.markdown("**📉 NO Position**")
     st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
-    for market in filtered_markets:
+    for market in open_markets:
         display_market_card(market)
 
 
-def calculate_entry_prices(market: Dict) -> Tuple[float, float]:
+def calculate_side_prices(trades: List[Dict], is_yes_side: bool) -> Tuple[float, float]:
     """
-    Calculate weighted average entry price and last execution price.
+    Calculate weighted average entry price and last execution price for one side.
     
     Args:
-        market: Market dictionary with trades and direction
+        trades: List of all trades for the market
+        is_yes_side: True for YES side, False for NO side
         
     Returns:
         Tuple of (weighted_avg_entry_price, last_execution_price)
     """
-    direction = market['direction']
-    trades = market.get('trades', [])
-    
-    if not trades:
-        return 0.0, 0.0
-    
-    # Filter trades for the dominant direction
+    # Filter trades for this side
     relevant_trades = []
     for trade in trades:
         side = trade.get('side', '').upper()
@@ -234,7 +255,7 @@ def calculate_entry_prices(market: Dict) -> Tuple[float, float]:
         is_bullish = (side == 'BUY' and 'YES' in outcome) or (side == 'SELL' and 'NO' in outcome)
         is_bearish = (side == 'BUY' and 'NO' in outcome) or (side == 'SELL' and 'YES' in outcome)
         
-        if (direction == 'BULLISH' and is_bullish) or (direction == 'BEARISH' and is_bearish):
+        if (is_yes_side and is_bullish) or (not is_yes_side and is_bearish):
             relevant_trades.append(trade)
     
     if not relevant_trades:
@@ -295,57 +316,59 @@ def display_market_card(market: Dict):
     yes_traders = len(market['bullish_users'])
     no_traders = len(market['bearish_users'])
     
-    # Calculate weighted average entry price and last execution price
-    avg_entry, last_price = calculate_entry_prices(market)
+    # Calculate prices for each side
+    yes_avg, yes_last = calculate_side_prices(market['trades'], is_yes_side=True)
+    no_avg, no_last = calculate_side_prices(market['trades'], is_yes_side=False)
     
     # Create compact row with container
     st.markdown('<div class="market-row">', unsafe_allow_html=True)
-    col1, col2, col3, col4, col5, col6 = st.columns([3, 1, 1, 1, 1.5, 1.5])
+    col1, col2, col3, col4 = st.columns([3, 1, 2, 2])
     
     with col1:
         st.markdown(f"**[{slug[:80]}]({market_url})**")
-        st.caption(f"👥 {users_display}")
+        st.caption(f"👥 {users_display} • {direction_emoji} {direction}")
     
     with col2:
         st.markdown(f"<span style='font-size: 0.85rem;'><strong>{level_name}</strong></span>", unsafe_allow_html=True)
         st.caption(f"Score: {score:.1f}")
     
     with col3:
-        # Weighted average entry price
-        if avg_entry > 0:
-            entry_color = "#38ef7d" if direction == "BULLISH" else "#f45c43"
-            st.markdown(f"<div style='text-align: center;'><span style='font-size: 0.95rem; font-weight: 600; color: {entry_color};'>{avg_entry:.1%}</span></div>", unsafe_allow_html=True)
-            st.caption(f"👥 {market['consensus_count']} traders")
-        else:
-            st.markdown("—")
-    
-    with col4:
-        # Last execution price
-        if last_price > 0:
-            st.markdown(f"<div style='text-align: center;'><span style='font-size: 0.95rem; font-weight: 600;'>{last_price:.1%}</span></div>", unsafe_allow_html=True)
-            st.caption(f"{direction_emoji} {direction}")
-        else:
-            st.markdown("—")
-    
-    with col5:
-        # YES position
+        # YES position with avg/last prices
         yes_bg = "rgba(56, 239, 125, 0.15)" if direction == "BULLISH" else "rgba(0,0,0,0.02)"
         st.markdown(f"""
-        <div style="background: {yes_bg}; padding: 0.3rem; border-radius: 0.3rem; text-align: center;">
-            <div style="font-size: 0.65rem; opacity: 0.7;">YES {yes_price:.0%}</div>
-            <div style="font-size: 0.95rem; font-weight: 600; color: #38ef7d;">👥 {yes_traders}</div>
-            <div style="font-size: 0.65rem; color: #7f8c8d;">${market['bullish_volume']:,.0f}</div>
+        <div style="background: {yes_bg}; padding: 0.3rem; border-radius: 0.3rem;">
+            <div style="text-align: center; margin-bottom: 0.2rem;">
+                <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
+                <div style="font-size: 1.3rem; font-weight: 700; color: #38ef7d; line-height: 1;">{yes_price:.1%}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; margin-bottom: 0.15rem; line-height: 1.1;">
+                <span style="color: #7f8c8d;">Avg: <strong style="color: #38ef7d;">{yes_avg:.1%}</strong></span>
+                <span style="color: #7f8c8d;">Last: <strong style="color: #38ef7d;">{yes_last:.1%}</strong></span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
+                <span style="font-weight: 600;">👥 {yes_traders}</span>
+                <span style="color: #7f8c8d;">${market['bullish_volume']:,.0f}</span>
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
-    with col6:
-        # NO position
+    with col4:
+        # NO position with avg/last prices
         no_bg = "rgba(244, 92, 67, 0.15)" if direction == "BEARISH" else "rgba(0,0,0,0.02)"
         st.markdown(f"""
-        <div style="background: {no_bg}; padding: 0.3rem; border-radius: 0.3rem; text-align: center;">
-            <div style="font-size: 0.65rem; opacity: 0.7;">NO {no_price:.0%}</div>
-            <div style="font-size: 0.95rem; font-weight: 600; color: #f45c43;">👥 {no_traders}</div>
-            <div style="font-size: 0.65rem; color: #7f8c8d;">${market['bearish_volume']:,.0f}</div>
+        <div style="background: {no_bg}; padding: 0.3rem; border-radius: 0.3rem;">
+            <div style="text-align: center; margin-bottom: 0.2rem;">
+                <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
+                <div style="font-size: 1.3rem; font-weight: 700; color: #f45c43; line-height: 1;">{no_price:.1%}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; margin-bottom: 0.15rem; line-height: 1.1;">
+                <span style="color: #7f8c8d;">Avg: <strong style="color: #f45c43;">{no_avg:.1%}</strong></span>
+                <span style="color: #7f8c8d;">Last: <strong style="color: #f45c43;">{no_last:.1%}</strong></span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
+                <span style="font-weight: 600;">👥 {no_traders}</span>
+                <span style="color: #7f8c8d;">${market['bearish_volume']:,.0f}</span>
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
