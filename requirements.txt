@@ -21,6 +21,8 @@ altair>=5.1.0
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.5.0
+loguru>=0.7.0
+colorama>=0.4.6
 
 # Development
 pytest>=7.4.0
