@@ -1,189 +1,75 @@
 # Polymarket Dashboard
 
-A Python-based real-time dashboard for Polymarket, featuring market discovery, trade tracking, and leaderboards.
-
-## Features
-
-- 🔥 **Hot Markets**: Browse trending markets by volume and activity
-- 🏆 **Leaderboard**: Track top traders and their performance
-- 👁️ **Watchlist**: Monitor selected markets with live updates
-- 📊 **Live Data**: Real-time price and trade feeds via WebSocket
-- 📈 **Analytics**: Market statistics and trader insights
-
-## Architecture
-
-### API Layers
-- **Gamma API**: Market metadata and discovery
-- **Data API**: Trade history and user activity
-- **WebSocket (RTDS)**: Real-time price and volume updates
-
-### Tech Stack
-- **Frontend**: Streamlit
-- **Backend**: Async Python with aiohttp
-- **Database**: SQLite
-- **Real-time**: WebSocket client
-
-## Project Structure
-
-```
-polyMDash/
-├── app.py                  # Main Streamlit application
-├── config.py               # Configuration settings
-├── requirements.txt        # Python dependencies
-├── clients/                # API client modules
-│   ├── __init__.py
-│   ├── gamma_client.py     # Gamma API client
-│   ├── trades_client.py    # Trades API client
-│   └── realtime_ws.py      # WebSocket client
-├── data/                   # Data layer
-│   ├── database.py         # Database models and queries
-│   └── polymarket.db       # SQLite database (created on first run)
-├── pages/                  # Additional Streamlit pages
-├── models/                 # Data models
-└── utils/                  # Utility functions
-
-```
+Conviction-based signal detection for Polymarket markets. Tracks specific traders and identifies high-conviction consensus trades.
 
 ## Installation
 
-1. **Clone or navigate to the project directory**
-
-2. **Install dependencies**
 ```bash
 pip install -r requirements.txt
-```
-
-3. **Run the dashboard**
-```bash
 streamlit run app.py
 ```
 
-The dashboard will open in your browser at `http://localhost:8501`
+## Architecture
+
+**Conviction Scoring Algorithm**
+- Consensus weighting: 1 + (n-1) × 3.0 multiplier for trades by multiple tracked users
+- Volume scoring with logarithmic scaling
+- Price extremity bonus for >85% or <15% positions
+- Recency decay with 6-hour half-life
+
+**API Integration**
+- Gamma API: Market data and status
+- Data API: Trade history for tracked wallets
+
+**Tech Stack**
+- Python 3.13 with Streamlit
+- Async clients (aiohttp)
+- SQLite for persistence
+- CSV-based user tracking
+
+## Structure
+
+```
+app.py                      # Main dashboard
+tracked_users.csv           # Tracked wallet addresses
+algorithms/
+  conviction_scorer.py      # Core scoring algorithm
+clients/
+  gamma_client.py           # Market data client
+  trades_client.py          # Trade history client
+data/
+  database.py               # SQLite persistence
+utils/
+  user_tracker.py           # CSV user management
+  helpers.py                # Utility functions
+tests/                      # 44 passing tests
+docs/                       # API and architecture docs
+```
 
 ## Usage
 
-### Hot Markets
-- Browse trending markets sorted by 24-hour volume
-- Filter by category and status
-- Add markets to your watchlist
+Dashboard displays open markets with consensus trades from tracked users. Filterable by:
+- Time window (15min to 7 days)
+- Conviction level (EXTREME, HIGH, MODERATE, LOW)
+- Minimum consensus count
 
-### Leaderboard
-- View top traders by volume
-- Filter by time window (15 min, 1 hour, 24 hours, etc.)
-- See trade counts and market diversity
-
-### Watchlist
-- Track selected markets
-- View real-time price updates
-- Monitor volume and liquidity changes
-
-### Live Data
-- Real-time trade feed
-- Price update stream
-- Market activity monitoring
+Auto-refresh enabled by default (30s interval).
 
 ## Configuration
 
-Edit `config.py` to customize:
-- Refresh intervals
-- Cache durations
-- Data retention periods
-- Display settings
-
-## API Clients
-
-### Gamma API Client
-```python
-from clients.gamma_client import GammaClient
-
-async with GammaClient() as client:
-    markets = await client.get_hot_markets(limit=20)
+Edit `tracked_users.csv` to modify tracked traders:
+```csv
+name,address
+HolyMoses7,0xa4b366ad22fc0d06f1e934ff468e8922431a87b8
+Bass,0x596422bcdd897703b96f4f931961b181b79d35df
 ```
 
-### Trades API Client
-```python
-from clients.trades_client import TradesClient
+Tune algorithm weights in `algorithms/conviction_scorer.py`.
 
-async with TradesClient() as client:
-    leaderboard = await client.compute_leaderboard()
-```
-
-### WebSocket Client
-```python
-from clients.realtime_ws import PriceTracker
-
-tracker = PriceTracker()
-await tracker.start(market_ids=["market-1", "market-2"])
-```
-
-## Database Schema
-
-### Markets Table
-- Market metadata and current state
-- Outcome prices and volume
-- Activity timestamps
-
-### Trades Table
-- Individual trade records
-- User addresses and volumes
-- Timestamps for analysis
-
-### Users Table
-- Trader statistics
-- Leaderboard cache
-- Activity summaries
-
-### Watchlist Table
-- User-selected markets
-- Tracking preferences
-
-## Development
-
-### Testing API Clients
-Each client module can be run independently:
+## Testing
 
 ```bash
-python clients/gamma_client.py
-python clients/trades_client.py
-python clients/realtime_ws.py
+pytest
 ```
 
-### Database Management
-```bash
-python data/database.py
-```
-
-## Features Roadmap
-
-- [ ] Advanced price charts and technical indicators
-- [ ] User portfolio tracking
-- [ ] Market alerts and notifications
-- [ ] Historical data analysis
-- [ ] Export functionality (CSV, JSON)
-- [ ] Custom market filters and search
-- [ ] Mobile-responsive design enhancements
-
-## Troubleshooting
-
-**Markets not loading?**
-- Check internet connection
-- Verify API endpoints are accessible
-- Check console for error messages
-
-**Database errors?**
-- Ensure `data/` directory has write permissions
-- Delete `polymarket.db` to reset database
-
-**WebSocket connection issues?**
-- Check firewall settings
-- Verify WebSocket URL is accessible
-- Review logs for connection errors
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Acknowledgments
-
-- Built on [Polymarket](https://polymarket.com) APIs
-- Powered by [Streamlit](https://streamlit.io)
+All 44 tests passing.

@@ -6,7 +6,7 @@ Surfaces high-conviction trades from tracked users with consensus signals.
 import streamlit as st
 from datetime import datetime, timedelta
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -190,21 +190,76 @@ def display_conviction_dashboard(time_window: str, min_conviction: str, min_cons
     
     # Table header
     st.markdown("### 📊 Markets by Conviction")
-    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3, 1, 1, 1.5, 1.5])
+    header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns([3, 1, 1, 1, 1.5, 1.5])
     with header_col1:
         st.markdown("**Market**")
     with header_col2:
         st.markdown("**Conviction**")
     with header_col3:
-        st.markdown("**Consensus**")
+        st.markdown("**Avg Entry**")
     with header_col4:
-        st.markdown("**YES Position**")
+        st.markdown("**Last Price**")
     with header_col5:
+        st.markdown("**YES Position**")
+    with header_col6:
         st.markdown("**NO Position**")
     st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
     for market in filtered_markets:
         display_market_card(market)
+
+
+def calculate_entry_prices(market: Dict) -> Tuple[float, float]:
+    """
+    Calculate weighted average entry price and last execution price.
+    
+    Args:
+        market: Market dictionary with trades and direction
+        
+    Returns:
+        Tuple of (weighted_avg_entry_price, last_execution_price)
+    """
+    direction = market['direction']
+    trades = market.get('trades', [])
+    
+    if not trades:
+        return 0.0, 0.0
+    
+    # Filter trades for the dominant direction
+    relevant_trades = []
+    for trade in trades:
+        side = trade.get('side', '').upper()
+        outcome = trade.get('outcome', '').upper()
+        
+        is_bullish = (side == 'BUY' and 'YES' in outcome) or (side == 'SELL' and 'NO' in outcome)
+        is_bearish = (side == 'BUY' and 'NO' in outcome) or (side == 'SELL' and 'YES' in outcome)
+        
+        if (direction == 'BULLISH' and is_bullish) or (direction == 'BEARISH' and is_bearish):
+            relevant_trades.append(trade)
+    
+    if not relevant_trades:
+        return 0.0, 0.0
+    
+    # Calculate weighted average entry price
+    total_volume = 0
+    weighted_sum = 0
+    
+    for trade in relevant_trades:
+        price = float(trade.get('price', 0))
+        size = float(trade.get('size', 0))
+        volume = price * size
+        
+        weighted_sum += price * volume
+        total_volume += volume
+    
+    avg_entry = weighted_sum / total_volume if total_volume > 0 else 0
+    
+    # Get last execution price (most recent trade)
+    sorted_trades = sorted(relevant_trades, key=lambda t: t.get('timestamp', 0), reverse=True)
+    last_price = float(sorted_trades[0].get('price', 0)) if sorted_trades else 0
+    
+    return avg_entry, last_price
+
 
 
 def display_market_card(market: Dict):
@@ -240,9 +295,12 @@ def display_market_card(market: Dict):
     yes_traders = len(market['bullish_users'])
     no_traders = len(market['bearish_users'])
     
+    # Calculate weighted average entry price and last execution price
+    avg_entry, last_price = calculate_entry_prices(market)
+    
     # Create compact row with container
     st.markdown('<div class="market-row">', unsafe_allow_html=True)
-    col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1.5, 1.5])
+    col1, col2, col3, col4, col5, col6 = st.columns([3, 1, 1, 1, 1.5, 1.5])
     
     with col1:
         st.markdown(f"**[{slug[:80]}]({market_url})**")
@@ -253,10 +311,23 @@ def display_market_card(market: Dict):
         st.caption(f"Score: {score:.1f}")
     
     with col3:
-        st.markdown(f"<span style='font-size: 0.85rem;'><strong>{market['consensus_count']}</strong> traders</span>", unsafe_allow_html=True)
-        st.caption(f"{direction_emoji} {direction}")
+        # Weighted average entry price
+        if avg_entry > 0:
+            entry_color = "#38ef7d" if direction == "BULLISH" else "#f45c43"
+            st.markdown(f"<div style='text-align: center;'><span style='font-size: 0.95rem; font-weight: 600; color: {entry_color};'>{avg_entry:.1%}</span></div>", unsafe_allow_html=True)
+            st.caption(f"👥 {market['consensus_count']} traders")
+        else:
+            st.markdown("—")
     
     with col4:
+        # Last execution price
+        if last_price > 0:
+            st.markdown(f"<div style='text-align: center;'><span style='font-size: 0.95rem; font-weight: 600;'>{last_price:.1%}</span></div>", unsafe_allow_html=True)
+            st.caption(f"{direction_emoji} {direction}")
+        else:
+            st.markdown("—")
+    
+    with col5:
         # YES position
         yes_bg = "rgba(56, 239, 125, 0.15)" if direction == "BULLISH" else "rgba(0,0,0,0.02)"
         st.markdown(f"""
@@ -267,7 +338,7 @@ def display_market_card(market: Dict):
         </div>
         """, unsafe_allow_html=True)
     
-    with col5:
+    with col6:
         # NO position
         no_bg = "rgba(244, 92, 67, 0.15)" if direction == "BEARISH" else "rgba(0,0,0,0.02)"
         st.markdown(f"""
