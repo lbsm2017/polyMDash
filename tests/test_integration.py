@@ -45,6 +45,66 @@ class TestActivityFeed:
         assert parse_time_window("Unknown") == 360  # Default
 
 
+class TestPriceCalculations:
+    """Test price calculation functions."""
+    
+    def test_calculate_entry_prices_bullish(self):
+        """Test weighted average and last price calculation for bullish direction."""
+        from app import calculate_entry_prices
+        
+        market = {
+            'direction': 'BULLISH',
+            'trades': [
+                {'side': 'BUY', 'outcome': 'YES', 'price': 0.6, 'size': 100, 'timestamp': 1000},
+                {'side': 'BUY', 'outcome': 'YES', 'price': 0.65, 'size': 200, 'timestamp': 2000},
+                {'side': 'SELL', 'outcome': 'NO', 'price': 0.3, 'size': 50, 'timestamp': 3000},
+            ]
+        }
+        
+        avg_entry, last_price = calculate_entry_prices(market)
+        
+        # Weighted average: (0.6*60 + 0.65*130 + 0.3*15) / (60 + 130 + 15)
+        expected_avg = (0.6 * 60 + 0.65 * 130 + 0.3 * 15) / (60 + 130 + 15)
+        assert abs(avg_entry - expected_avg) < 0.001
+        
+        # Last price should be most recent (timestamp 3000)
+        assert last_price == 0.3
+    
+    def test_calculate_entry_prices_bearish(self):
+        """Test weighted average and last price calculation for bearish direction."""
+        from app import calculate_entry_prices
+        
+        market = {
+            'direction': 'BEARISH',
+            'trades': [
+                {'side': 'BUY', 'outcome': 'NO', 'price': 0.4, 'size': 100, 'timestamp': 1000},
+                {'side': 'SELL', 'outcome': 'YES', 'price': 0.7, 'size': 50, 'timestamp': 2000},
+            ]
+        }
+        
+        avg_entry, last_price = calculate_entry_prices(market)
+        
+        # Weighted average: (0.4*40 + 0.7*35) / (40 + 35)
+        expected_avg = (0.4 * 40 + 0.7 * 35) / (40 + 35)
+        assert abs(avg_entry - expected_avg) < 0.001
+        
+        # Last price should be most recent (timestamp 2000)
+        assert last_price == 0.7
+    
+    def test_calculate_entry_prices_no_trades(self):
+        """Test price calculation with no trades."""
+        from app import calculate_entry_prices
+        
+        market = {
+            'direction': 'BULLISH',
+            'trades': []
+        }
+        
+        avg_entry, last_price = calculate_entry_prices(market)
+        assert avg_entry == 0.0
+        assert last_price == 0.0
+
+
 class TestDataFiltering:
     """Test data filtering logic."""
     
