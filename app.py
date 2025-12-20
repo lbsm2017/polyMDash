@@ -189,7 +189,7 @@ def main():
 def display_conviction_dashboard():
     """Main dashboard view showing conviction-weighted markets."""
     
-    st.markdown('<div class="main-header">🎯 High Conviction Signals</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">📡 Traders Scanner</div>', unsafe_allow_html=True)
     
     tracked_users = tracker.get_all_users()
     if not tracked_users:
@@ -231,7 +231,6 @@ def display_conviction_dashboard():
         return
     
     # Sorting controls
-    st.markdown("### 📊 Markets by Conviction")
     col_sort, col_spacer = st.columns([2, 6])
     with col_sort:
         sort_by = st.selectbox(
