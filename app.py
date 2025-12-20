@@ -103,6 +103,47 @@ def main():
         help="Choose between your custom list or Polymarket's monthly profit leaderboard"
     )
     
+    # Leaderboard filters (only show when Leaderboard is selected)
+    category = "overall"
+    period = "monthly"
+    if trader_source == "🏆 Leaderboard":
+        category_map = {
+            "All Categories": "overall",
+            "Politics": "politics",
+            "Sports": "sports",
+            "Crypto": "crypto",
+            "Finance": "finance",
+            "Culture": "culture",
+            "Mentions": "mentions",
+            "Weather": "weather",
+            "Economics": "economics",
+            "Tech": "tech"
+        }
+        
+        selected_category = st.sidebar.selectbox(
+            "Category",
+            options=list(category_map.keys()),
+            index=0,
+            help="Filter leaderboard by market category"
+        )
+        category = category_map[selected_category]
+        
+        period_map = {
+            "Today": "daily",
+            "Weekly": "weekly",
+            "Monthly": "monthly",
+            "All": "all"
+        }
+        
+        selected_period = st.sidebar.radio(
+            "Time Period",
+            options=list(period_map.keys()),
+            index=2,  # Default to Monthly
+            horizontal=True,
+            help="Select time period for leaderboard rankings"
+        )
+        period = period_map[selected_period]
+    
     st.sidebar.markdown("---")
     
     # Tracked users display with edit capabilities
@@ -189,7 +230,7 @@ def main():
     st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
     
     # Main content
-    display_conviction_dashboard(trader_source)
+    display_conviction_dashboard(trader_source, category, period)
     
     # Auto-refresh logic
     if auto_refresh:
@@ -199,12 +240,12 @@ def main():
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_leaderboard_traders(limit: int = 50) -> List[Dict[str, str]]:
+def fetch_leaderboard_traders(category: str = "overall", period: str = "monthly", limit: int = 50) -> List[Dict[str, str]]:
     """Fetch traders from Polymarket leaderboard."""
     try:
         async def fetch():
             client = LeaderboardClient()
-            return await client.fetch_monthly_profit_leaders(limit)
+            return await client.fetch_leaderboard(category=category, period=period, limit=limit)
         
         return asyncio.run(fetch())
     except Exception as e:
@@ -212,7 +253,7 @@ def fetch_leaderboard_traders(limit: int = 50) -> List[Dict[str, str]]:
         return []
 
 
-def display_conviction_dashboard(trader_source: str = "👤 User List"):
+def display_conviction_dashboard(trader_source: str = "👤 User List", category: str = "overall", period: str = "monthly"):
     """Main dashboard view showing conviction-weighted markets."""
     
     st.markdown('<div class="main-header">📡 Traders Scanner</div>', unsafe_allow_html=True)
@@ -221,7 +262,7 @@ def display_conviction_dashboard(trader_source: str = "👤 User List"):
     if trader_source == "🏆 Leaderboard":
         # Fetch from leaderboard
         with st.spinner("Fetching leaderboard traders..."):
-            leaderboard_data = fetch_leaderboard_traders(50)
+            leaderboard_data = fetch_leaderboard_traders(category=category, period=period, limit=50)
             
         if not leaderboard_data:
             st.error("❌ Failed to fetch leaderboard. Falling back to user list.")

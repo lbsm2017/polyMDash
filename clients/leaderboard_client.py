@@ -22,11 +22,13 @@ class LeaderboardClient:
         "https://data-api.polymarket.com/leaderboard",
     ]
     
-    async def _fetch_via_api(self, limit: int = 50) -> List[Dict[str, str]]:
+    async def _fetch_via_api(self, category: str = "overall", period: str = "monthly", limit: int = 50) -> List[Dict[str, str]]:
         """
         Try to fetch leaderboard data via API endpoints.
         
         Args:
+            category: Category filter (overall, politics, sports, etc.)
+            period: Time period (daily, weekly, monthly, all)
             limit: Maximum number of traders to return
             
         Returns:
@@ -35,8 +37,8 @@ class LeaderboardClient:
         async with aiohttp.ClientSession() as session:
             for api_url in self.API_ENDPOINTS:
                 try:
-                    # Try monthly profit endpoint
-                    url = f"{api_url}/monthly/profit"
+                    # Try dynamic endpoint with category and period
+                    url = f"{api_url}/{category}/{period}/profit"
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                         'Accept': 'application/json'
@@ -112,17 +114,19 @@ class LeaderboardClient:
         
         return traders
     
-    async def _fetch_via_scraping(self, limit: int = 50) -> List[Dict[str, str]]:
+    async def _fetch_via_scraping(self, category: str = "overall", period: str = "monthly", limit: int = 50) -> List[Dict[str, str]]:
         """
         Fallback method: scrape leaderboard HTML.
         
         Args:
+            category: Category filter (overall, politics, sports, etc.)
+            period: Time period (daily, weekly, monthly, all)
             limit: Maximum number of traders to return
             
         Returns:
             List of dicts with 'name' and 'wallet' keys
         """
-        url = f"{self.BASE_URL}/leaderboard/overall/monthly/profit"
+        url = f"{self.BASE_URL}/leaderboard/{category}/{period}/profit"
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -181,11 +185,38 @@ class LeaderboardClient:
             logger.error(f"Error scraping leaderboard: {e}")
             return []
     
-    async def fetch_monthly_profit_leaders(self, limit: int = 50) -> List[Dict[str, str]]:
+    async def fetch_leaderboard(self, category: str = "overall", period: str = "monthly", limit: int = 50) -> List[Dict[str, str]]:
         """
-        Fetch top traders from monthly profit leaderboard.
+        Fetch top traders from leaderboard with custom filters.
         
         Tries API first, falls back to HTML scraping if API fails.
+        
+        Args:
+            category: Category filter (overall, politics, sports, crypto, etc.)
+            period: Time period (daily, weekly, monthly, all)
+            limit: Maximum number of traders to return
+            
+        Returns:
+            List of dicts with 'name' and 'wallet' keys
+        """
+        # Try API first (faster and more reliable)
+        traders = await self._fetch_via_api(category=category, period=period, limit=limit)
+        
+        if traders:
+            return traders
+        
+        # Fallback to HTML scraping
+        logger.info(f"API fetch failed, falling back to HTML scraping for {category}/{period}")
+        traders = await self._fetch_via_scraping(category=category, period=period, limit=limit)
+        
+        if not traders:
+            logger.error(f"Both API and scraping methods failed to fetch leaderboard for {category}/{period}")
+        
+        return traders
+    
+    async def fetch_monthly_profit_leaders(self, limit: int = 50) -> List[Dict[str, str]]:
+        """
+        Fetch top traders from monthly profit leaderboard (legacy method).
         
         Args:
             limit: Maximum number of traders to return
@@ -193,17 +224,4 @@ class LeaderboardClient:
         Returns:
             List of dicts with 'name' and 'wallet' keys
         """
-        # Try API first (faster and more reliable)
-        traders = await self._fetch_via_api(limit)
-        
-        if traders:
-            return traders
-        
-        # Fallback to HTML scraping
-        logger.info("API fetch failed, falling back to HTML scraping")
-        traders = await self._fetch_via_scraping(limit)
-        
-        if not traders:
-            logger.error("Both API and scraping methods failed to fetch leaderboard")
-        
-        return traders
+        return await self.fetch_leaderboard(category="overall", period="monthly", limit=limit)
