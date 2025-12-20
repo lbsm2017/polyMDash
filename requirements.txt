@@ -10,6 +10,7 @@ numpy>=1.24.0
 aiohttp>=3.9.0
 websockets>=12.0
 requests>=2.31.0
+beautifulsoup4>=4.12.0
 
 # Optional: Polymarket SDK
 # polymarket-gamma>=0.1.0
