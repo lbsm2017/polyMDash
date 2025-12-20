@@ -49,7 +49,7 @@ class TradesClient:
             params: Query parameters
             
         Returns:
-            JSON response data
+            JSON response data or None on error
         """
         url = f"{self.BASE_URL}{endpoint}"
         
@@ -58,8 +58,11 @@ class TradesClient:
                 response.raise_for_status()
                 return await response.json()
         except aiohttp.ClientError as e:
-            logger.error(f"API request failed: {e}")
-            raise
+            logger.error(f"API request failed for {url}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in API request: {e}")
+            return None
             
     async def get_trades(
         self,
@@ -82,7 +85,7 @@ class TradesClient:
             taker_only: Filter by taker side only
             
         Returns:
-            List of trade dictionaries
+            List of trade dictionaries or empty list on error
         """
         params = {
             "limit": limit,
@@ -99,7 +102,16 @@ class TradesClient:
             params["takerOnly"] = str(taker_only).lower()
             
         logger.info(f"Fetching trades with params: {params}")
-        return await self._request("/trades", params)
+        result = await self._request("/trades", params)
+        
+        # Ensure we always return a list
+        if result is None:
+            return []
+        if not isinstance(result, list):
+            logger.warning(f"Expected list from API but got {type(result)}")
+            return []
+        
+        return result
         
     async def get_user_trades(
         self,

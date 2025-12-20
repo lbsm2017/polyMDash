@@ -307,10 +307,10 @@ def display_trades_list(trades: List[Dict], tracked_users: bool):
                 st.metric("Volume", f"${volume:.2f}")
                 
                 # Timestamp
-                timestamp = trade.get('timestamp', '')
+                timestamp = trade.get('timestamp', 0)
                 if timestamp:
                     try:
-                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        dt = datetime.fromtimestamp(timestamp)
                         st.caption(f"{format_time_ago(dt)}")
                     except:
                         pass
@@ -419,37 +419,44 @@ def load_tracked_users_activity(wallet_addresses: List[str], time_window: str) -
     """Load activity for tracked users."""
     
     minutes = parse_time_window(time_window)
+    cutoff_timestamp = int((datetime.now() - timedelta(minutes=minutes)).timestamp())
     
     try:
         async def fetch():
             async with TradesClient() as client:
                 all_trades = []
                 for wallet in wallet_addresses:
+                    logger.info(f"Fetching trades for wallet: {wallet}")
                     trades = await client.get_user_trades(wallet, limit=100)
-                    all_trades.extend(trades)
+                    
+                    # Check if trades is None or empty
+                    if not trades:
+                        logger.info(f"No trades returned for wallet: {wallet}")
+                        continue
+                    
+                    logger.info(f"Got {len(trades)} trades for wallet: {wallet}")
+                    
+                    # Filter valid trades by timestamp
+                    for trade in trades:
+                        if not isinstance(trade, dict):
+                            continue
+                        
+                        trade_ts = trade.get('timestamp', 0)
+                        if trade_ts >= cutoff_timestamp:
+                            all_trades.append(trade)
+                
+                logger.info(f"Total trades after filtering: {len(all_trades)}")
                 return all_trades
         
         trades = asyncio.run(fetch())
         
-        # Filter by time window
-        cutoff = datetime.now() - timedelta(minutes=minutes)
-        recent_trades = []
-        
-        for trade in trades:
-            try:
-                trade_time = datetime.fromisoformat(trade.get('timestamp', '').replace('Z', '+00:00'))
-                if trade_time.replace(tzinfo=None) >= cutoff:
-                    recent_trades.append(trade)
-            except:
-                continue
-        
         # Sort by timestamp desc
-        recent_trades.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        trades.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
         
-        return recent_trades
+        return trades
         
     except Exception as e:
-        logger.error(f"Error loading tracked user activity: {e}")
+        logger.error(f"Error loading tracked user activity: {e}", exc_info=True)
         return []
 
 
@@ -458,16 +465,38 @@ def load_global_activity(time_window: str) -> List[Dict]:
     """Load global trading activity."""
     
     minutes = parse_time_window(time_window)
+    cutoff_timestamp = int((datetime.now() - timedelta(minutes=minutes)).timestamp())
     
     try:
         async def fetch():
             async with TradesClient() as client:
-                return await client.get_recent_activity(minutes=minutes, limit=500)
+                logger.info(f"Fetching global trades, limit=500")
+                trades = await client.get_trades(limit=500)
+                
+                # Check if trades is None or empty
+                if not trades:
+                    logger.info("No global trades returned")
+                    return []
+                
+                logger.info(f"Got {len(trades)} global trades")
+                
+                # Filter valid trades by timestamp
+                recent_trades = []
+                for trade in trades:
+                    if not isinstance(trade, dict):
+                        continue
+                    
+                    trade_ts = trade.get('timestamp', 0)
+                    if trade_ts >= cutoff_timestamp:
+                        recent_trades.append(trade)
+                
+                logger.info(f"Filtered to {len(recent_trades)} recent trades")
+                return recent_trades
         
         return asyncio.run(fetch())
         
     except Exception as e:
-        logger.error(f"Error loading global activity: {e}")
+        logger.error(f"Error loading global activity: {e}", exc_info=True)
         return []
 
 
