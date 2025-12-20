@@ -229,8 +229,24 @@ def display_conviction_dashboard():
         st.info("No open markets found. All markets with activity are currently closed.")
         return
     
-    # Table header
+    # Sorting controls
     st.markdown("### 📊 Markets by Conviction")
+    col_sort, col_spacer = st.columns([2, 6])
+    with col_sort:
+        sort_by = st.selectbox(
+            "Sort by:",
+            ["Recent Activity", "Total Volume", "Number of Traders"],
+            key="market_sort"
+        )
+    
+    # Apply sorting
+    if sort_by == "Total Volume":
+        open_markets.sort(key=lambda x: x['bullish_volume'] + x['bearish_volume'], reverse=True)
+    elif sort_by == "Number of Traders":
+        open_markets.sort(key=lambda x: len(x['bullish_users']) + len(x['bearish_users']), reverse=True)
+    # else: Recent Activity is already sorted by weighted_avg_time from ConvictionScorer
+    
+    # Table header
     header_col1, header_col2, header_col3, header_col4 = st.columns([3, 1, 2, 2])
     with header_col1:
         st.markdown("**Market**")
