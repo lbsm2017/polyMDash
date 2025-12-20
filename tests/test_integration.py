@@ -153,3 +153,119 @@ class TestMetricsCalculation:
         assert yes_pct == 60.0
         assert no_pct == 40.0
         assert yes_pct + no_pct == 100.0
+
+
+class TestExpirationFunctions:
+    """Test market expiration calculation functions."""
+    
+    def test_get_time_until_expiration_valid(self):
+        """Test expiration calculation with valid ISO date."""
+        from app import get_time_until_expiration
+        from datetime import datetime, timezone, timedelta
+        
+        # Create a future date (2 days from now)
+        future = datetime.now(timezone.utc) + timedelta(days=2)
+        future_iso = future.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        formatted_date, minutes = get_time_until_expiration(future_iso)
+        
+        # Should have formatted date
+        assert formatted_date != "N/A"
+        assert len(formatted_date) == 19  # yyyy-mm-dd hh:mm:ss format
+        
+        # Should be approximately 2 days (2880 minutes, allow 5 min tolerance)
+        assert 2875 <= minutes <= 2885
+    
+    def test_get_time_until_expiration_past(self):
+        """Test expiration calculation with past date."""
+        from app import get_time_until_expiration
+        from datetime import datetime, timezone, timedelta
+        
+        # Create a past date
+        past = datetime.now(timezone.utc) - timedelta(days=1)
+        past_iso = past.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        formatted_date, minutes = get_time_until_expiration(past_iso)
+        
+        # Should return 0 for expired markets
+        assert minutes == 0
+    
+    def test_get_time_until_expiration_empty(self):
+        """Test expiration calculation with empty string."""
+        from app import get_time_until_expiration
+        
+        formatted_date, minutes = get_time_until_expiration("")
+        
+        assert formatted_date == "N/A"
+        assert minutes == 0
+    
+    def test_get_time_until_expiration_invalid(self):
+        """Test expiration calculation with invalid date."""
+        from app import get_time_until_expiration
+        
+        formatted_date, minutes = get_time_until_expiration("invalid-date")
+        
+        assert formatted_date == "N/A"
+        assert minutes == 0
+    
+    def test_get_time_until_expiration_timezone_aware(self):
+        """Test that expiration calculation is timezone-aware."""
+        from app import get_time_until_expiration
+        
+        # Test with typical Polymarket date format
+        end_date = "2026-02-08T12:00:00Z"
+        formatted_date, minutes = get_time_until_expiration(end_date)
+        
+        # Should parse correctly
+        assert formatted_date != "N/A"
+        assert minutes > 0  # Should be in the future
+        assert "2026-02-08" in formatted_date
+    
+    def test_format_time_elapsed_minutes(self):
+        """Test time formatting for minutes."""
+        from app import format_time_elapsed
+        
+        assert format_time_elapsed(0) == "0m"
+        assert format_time_elapsed(15) == "15m"
+        assert format_time_elapsed(59) == "59m"
+    
+    def test_format_time_elapsed_hours(self):
+        """Test time formatting for hours."""
+        from app import format_time_elapsed
+        
+        # 60 minutes = 1h0m
+        assert format_time_elapsed(60) == "1h0m"
+        
+        # 90 minutes = 1h30m
+        assert format_time_elapsed(90) == "1h30m"
+        
+        # 1439 minutes = 23h59m
+        assert format_time_elapsed(1439) == "23h59m"
+    
+    def test_format_time_elapsed_days(self):
+        """Test time formatting for days."""
+        from app import format_time_elapsed
+        
+        # 1440 minutes = 1 day = 1d0h
+        assert format_time_elapsed(1440) == "1d0h"
+        
+        # 1500 minutes = 1d1h
+        assert format_time_elapsed(1500) == "1d1h"
+        
+        # 43199 minutes = 29d23h
+        assert format_time_elapsed(43199) == "29d23h"
+    
+    def test_format_time_elapsed_months(self):
+        """Test time formatting for months."""
+        from app import format_time_elapsed
+        
+        # 43200 minutes = 30 days = 1M0d
+        assert format_time_elapsed(43200) == "1M0d"
+        
+        # 50000 minutes ≈ 1M4d
+        result = format_time_elapsed(50000)
+        assert result.startswith("1M")
+        
+        # 100000 minutes ≈ 2M9d
+        result = format_time_elapsed(100000)
+        assert result.startswith("2M")

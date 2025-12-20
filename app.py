@@ -235,13 +235,24 @@ def display_conviction_dashboard():
     with col_sort:
         sort_by = st.selectbox(
             "Sort by:",
-            ["Recent Activity", "Conviction", "Volume ($)", "Number of Trades"],
+            ["Recent Activity", "Conviction", "Expiration", "Volume ($)", "Number of Trades"],
             key="market_sort"
         )
     
     # Apply sorting
     if sort_by == "Conviction":
         open_markets.sort(key=lambda x: x['conviction_score'], reverse=True)
+    elif sort_by == "Expiration":
+        # Sort by expiration time (soonest first)
+        def get_expiration_minutes(market):
+            market_data = batch_market_data.get(market['slug'])
+            if market_data:
+                end_date_iso = market_data.get('end_date_iso', '')
+                if end_date_iso:
+                    _, minutes = get_time_until_expiration(end_date_iso)
+                    return minutes
+            return float('inf')  # Put markets without expiration data at the end
+        open_markets.sort(key=get_expiration_minutes)
     elif sort_by == "Volume ($)":
         open_markets.sort(key=lambda x: x['bullish_volume'] + x['bearish_volume'], reverse=True)
     elif sort_by == "Number of Trades":
@@ -249,14 +260,16 @@ def display_conviction_dashboard():
     # else: Recent Activity is already sorted by weighted_avg_time from ConvictionScorer
     
     # Table header
-    header_col1, header_col2, header_col3, header_col4 = st.columns([3, 1, 2, 2])
+    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3.5, 1, 1, 1.5, 1.5])
     with header_col1:
         st.markdown("**Market**")
     with header_col2:
         st.markdown("**Conviction**")
     with header_col3:
-        st.markdown("**📈 YES Position**")
+        st.markdown("**Expire**")
     with header_col4:
+        st.markdown("**📈 YES Position**")
+    with header_col5:
         st.markdown("**📉 NO Position**")
     st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
@@ -287,6 +300,41 @@ def format_time_elapsed(minutes: int) -> str:
         months = minutes // 43200
         days = (minutes % 43200) // 1440
         return f"{months}M{days}d"
+
+
+def get_time_until_expiration(end_date_iso: str) -> tuple:
+    """
+    Calculate time until market expiration.
+    
+    Args:
+        end_date_iso: ISO format date string
+        
+    Returns:
+        Tuple of (formatted_datetime, minutes_remaining)
+    """
+    from datetime import datetime, timezone
+    
+    if not end_date_iso:
+        return ("N/A", 0)
+    
+    try:
+        # Parse ISO date with timezone support
+        end_date = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00'))
+        
+        # Get current time in UTC
+        now = datetime.now(timezone.utc)
+        
+        # Calculate minutes remaining
+        time_delta = end_date - now
+        minutes_remaining = int(time_delta.total_seconds() / 60)
+        
+        # Format datetime as yyyy-mm-dd hh:mm:ss
+        formatted_date = end_date.strftime('%Y-%m-%d %H:%M:%S')
+        
+        return (formatted_date, max(0, minutes_remaining))
+    except Exception as e:
+        logger.warning(f"Failed to parse expiration date '{end_date_iso}': {e}")
+        return ("N/A", 0)
 
 
 def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
@@ -429,7 +477,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
     
     # Create compact row with container
     st.markdown('<div class="market-row">', unsafe_allow_html=True)
-    col1, col2, col3, col4 = st.columns([3, 1, 2, 2])
+    col1, col2, col3, col4, col5 = st.columns([3.5, 1, 1, 1.5, 1.5])
     
     with col1:
         st.markdown(f"**[{slug[:80]}]({market_url})**")
@@ -460,6 +508,19 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         st.caption(f"Score: {score:.1f}")
     
     with col3:
+        # Calculate and display expiration time
+        end_date_iso = market_data.get('end_date_iso', '') if market_data else ''
+        exp_date, exp_minutes = get_time_until_expiration(end_date_iso)
+        exp_time_str = format_time_elapsed(exp_minutes)
+        exp_color = "#e74c3c" if exp_minutes < 60 else "#7f8c8d"
+        st.markdown(f"""
+        <div style='text-align: center; padding-top: 0.3rem;'>
+            <div style='font-size: 0.7rem; color: {exp_color}; font-weight: 500;'>{exp_date}</div>
+            <div style='color: {exp_color}; font-weight: 600; font-size: 0.85rem;'>[{exp_time_str}]</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
         # YES position
         yes_bg = "rgba(56, 239, 125, 0.1)"
         st.markdown(f"""
@@ -475,7 +536,7 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         </div>
         """, unsafe_allow_html=True)
     
-    with col4:
+    with col5:
         # NO position
         no_bg = "rgba(244, 92, 67, 0.1)"
         st.markdown(f"""
@@ -575,6 +636,15 @@ def get_market_data(slug: str) -> Optional[Dict]:
                     if isinstance(prices, str):
                         import json
                         prices = json.loads(prices)
+                    
+                    # For grouped markets, prefer the event's end date over the market's end date
+                    end_date = market.get('endDate', '')
+                    events = market.get('events', [])
+                    if events and isinstance(events, list) and len(events) > 0:
+                        event_end_date = events[0].get('endDate', '')
+                        if event_end_date:
+                            end_date = event_end_date
+                    
                     return {
                         'yes_price': float(prices[0]) if prices else 0.5,
                         'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
@@ -582,6 +652,7 @@ def get_market_data(slug: str) -> Optional[Dict]:
                         'liquidity': market.get('liquidity', 0),
                         'active': is_active,
                         'closed': is_closed,
+                        'endDate': end_date,
                     }
             return None
         
@@ -621,54 +692,13 @@ def get_batch_market_data(slugs: List[str]) -> Dict[str, Optional[Dict]]:
                             import json
                             prices = json.loads(prices)
                         
-                        market_data[slug] = {
-                            'yes_price': float(prices[0]) if prices else 0.5,
-                            'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
-                            'volume': market.get('volume', 0),
-                            'liquidity': market.get('liquidity', 0),
-                            'active': is_active,
-                            'closed': is_closed,
-                        }
-                    else:
-                        market_data[slug] = None
-                
-                return market_data
-        
-        return asyncio.run(fetch_all())
-    except Exception as e:
-        logger.error(f"Error fetching batch market data: {e}")
-        return {slug: None for slug in slugs}
-
-
-@st.cache_data(ttl=60)
-def get_batch_market_data(slugs: List[str]) -> Dict[str, Optional[Dict]]:
-    """Fetch market data for multiple markets in parallel."""
-    if not slugs:
-        return {}
-    
-    try:
-        async def fetch_all():
-            async with GammaClient() as client:
-                # Fetch all markets in parallel
-                tasks = [client.get_market_by_slug(slug) for slug in slugs]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                market_data = {}
-                for slug, market in zip(slugs, results):
-                    if isinstance(market, dict):
-                        # Check if market is closed
-                        is_closed = market.get('closed', False)
-                        is_active = market.get('active', True)
-                        
-                        # Filter out closed/inactive markets
-                        if is_closed or not is_active:
-                            market_data[slug] = None
-                            continue
-                        
-                        prices = market.get('outcomePrices', [0.5, 0.5])
-                        if isinstance(prices, str):
-                            import json
-                            prices = json.loads(prices)
+                        # For grouped markets, prefer the event's end date over the market's end date
+                        end_date = market.get('endDate', '')
+                        events = market.get('events', [])
+                        if events and isinstance(events, list) and len(events) > 0:
+                            event_end_date = events[0].get('endDate', '')
+                            if event_end_date:
+                                end_date = event_end_date
                         
                         market_data[slug] = {
                             'yes_price': float(prices[0]) if prices else 0.5,
@@ -677,6 +707,7 @@ def get_batch_market_data(slugs: List[str]) -> Dict[str, Optional[Dict]]:
                             'liquidity': market.get('liquidity', 0),
                             'active': is_active,
                             'closed': is_closed,
+                            'endDate': end_date,
                         }
                     else:
                         market_data[slug] = None

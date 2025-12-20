@@ -170,6 +170,14 @@ class APIPool:
                 if isinstance(prices, str):
                     prices = json.loads(prices)
                 
+                # For grouped markets, prefer the event's end date over the market's end date
+                end_date = result.get('endDate', '')
+                events = result.get('events', [])
+                if events and isinstance(events, list) and len(events) > 0:
+                    event_end_date = events[0].get('endDate', '')
+                    if event_end_date:
+                        end_date = event_end_date
+                
                 market_data[slug] = {
                     'yes_price': float(prices[0]) if prices else 0.5,
                     'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
@@ -177,6 +185,7 @@ class APIPool:
                     'liquidity': result.get('liquidity', 0),
                     'active': is_active,
                     'closed': is_closed,
+                    'end_date_iso': end_date,
                 }
                 logger.info(f"Added market {slug} with prices YES={prices[0]}, NO={prices[1]}")
             else:
