@@ -136,7 +136,7 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS watchlist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                market_id TEXT NOT NULL,
+                market_id TEXT NOT NULL UNIQUE,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (market_id) REFERENCES markets(id)
             )
