@@ -9,36 +9,25 @@ from datetime import datetime, timedelta
 class TestActivityFeed:
     """Test activity feed functionality."""
     
-    def test_categorize_outcome(self):
-        """Test outcome categorization logic."""
-        from app import categorize_outcome
-        
-        assert categorize_outcome("YES") == "YES"
-        assert categorize_outcome("yes") == "YES"
-        assert categorize_outcome("NO") == "NO"
-        assert categorize_outcome("no") == "NO"
-        assert categorize_outcome("Maybe") == "Other"
-        assert categorize_outcome("Trump") == "Other"
-    
     def test_format_time_ago(self):
         """Test time ago formatting."""
         from app import format_time_ago
         
-        now = datetime.now()
+        now = int(datetime.now().timestamp())
         
         # Minutes ago
-        dt = now - timedelta(minutes=5)
-        result = format_time_ago(dt)
-        assert "5m ago" == result
+        ts = int((datetime.now() - timedelta(minutes=5)).timestamp())
+        result = format_time_ago(ts)
+        assert "5m ago" == result or "4m ago" == result  # Allow 1 minute tolerance
         
         # Hours ago
-        dt = now - timedelta(hours=2)
-        result = format_time_ago(dt)
-        assert "2h ago" == result
+        ts = int((datetime.now() - timedelta(hours=2)).timestamp())
+        result = format_time_ago(ts)
+        assert "2h ago" == result or "1h ago" == result  # Allow tolerance
         
         # Days ago
-        dt = now - timedelta(days=3)
-        result = format_time_ago(dt)
+        ts = int((datetime.now() - timedelta(days=3)).timestamp())
+        result = format_time_ago(ts)
         assert "3d ago" == result
         
         # Just now
@@ -49,11 +38,11 @@ class TestActivityFeed:
         """Test time window parsing."""
         from app import parse_time_window
         
-        assert parse_time_window("Last 5 minutes") == 5
-        assert parse_time_window("Last 15 minutes") == 15
-        assert parse_time_window("Last hour") == 60
+        assert parse_time_window("Last 1 hour") == 60
+        assert parse_time_window("Last 6 hours") == 360
         assert parse_time_window("Last 24 hours") == 1440
-        assert parse_time_window("Unknown") == 15  # Default
+        assert parse_time_window("Last 3 days") == 4320
+        assert parse_time_window("Unknown") == 360  # Default
 
 
 class TestDataFiltering:

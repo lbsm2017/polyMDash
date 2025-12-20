@@ -2,7 +2,7 @@
 User tracking utilities for managing followed traders.
 """
 
-import json
+import csv
 from typing import List, Dict, Optional
 from pathlib import Path
 import logging
@@ -13,24 +13,29 @@ logger = logging.getLogger(__name__)
 class UserTracker:
     """Manage tracked users/traders."""
     
-    def __init__(self, config_file: str = "tracked_users.json"):
+    def __init__(self, config_file: str = "tracked_users.csv"):
         """
         Initialize user tracker.
         
         Args:
-            config_file: Path to tracked users JSON file
+            config_file: Path to tracked users CSV file
         """
         self.config_file = config_file
         self._users = []
         self._load_users()
         
     def _load_users(self):
-        """Load tracked users from JSON file."""
+        """Load tracked users from CSV file."""
         try:
             if Path(self.config_file).exists():
-                with open(self.config_file, 'r') as f:
-                    data = json.load(f)
-                    self._users = data.get('tracked_users', [])
+                with open(self.config_file, 'r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    self._users = []
+                    for row in reader:
+                        self._users.append({
+                            'name': row['name'],
+                            'wallet': row['address']
+                        })
                 logger.info(f"Loaded {len(self._users)} tracked users")
             else:
                 logger.warning(f"Tracked users file not found: {self.config_file}")
@@ -40,10 +45,16 @@ class UserTracker:
             self._users = []
             
     def _save_users(self):
-        """Save tracked users to JSON file."""
+        """Save tracked users to CSV file."""
         try:
-            with open(self.config_file, 'w') as f:
-                json.dump({'tracked_users': self._users}, f, indent=2)
+            with open(self.config_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=['name', 'address'])
+                writer.writeheader()
+                for user in self._users:
+                    writer.writerow({
+                        'name': user['name'],
+                        'address': user['wallet']
+                    })
             logger.info(f"Saved {len(self._users)} tracked users")
         except Exception as e:
             logger.error(f"Error saving tracked users: {e}")
@@ -181,12 +192,12 @@ class UserTracker:
 _tracker_instance: Optional[UserTracker] = None
 
 
-def get_user_tracker(config_file: str = "tracked_users.json") -> UserTracker:
+def get_user_tracker(config_file: str = "tracked_users.csv") -> UserTracker:
     """
     Get or create the global UserTracker instance.
     
     Args:
-        config_file: Path to tracked users JSON file
+        config_file: Path to tracked users CSV file
         
     Returns:
         UserTracker instance
@@ -199,7 +210,7 @@ def get_user_tracker(config_file: str = "tracked_users.json") -> UserTracker:
 
 if __name__ == "__main__":
     # Test the tracker
-    tracker = UserTracker("tracked_users.json")
+    tracker = UserTracker("tracked_users.csv")
     
     print(f"Loaded {tracker.count()} tracked users:")
     for user in tracker.get_all_users():

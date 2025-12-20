@@ -53,7 +53,7 @@ async def fetch_recent_activities():
     tracked_wallets = tracker.get_wallet_addresses()
     
     if not tracked_wallets:
-        print(f"{Fore.YELLOW}No tracked users found in tracked_users.json{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}No tracked users found in tracked_users.csv{Style.RESET_ALL}")
         return
     
     print(f"\n{Fore.CYAN}Tracking {len(tracked_wallets)} users:{Style.RESET_ALL}")

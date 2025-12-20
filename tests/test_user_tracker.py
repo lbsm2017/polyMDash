@@ -3,7 +3,7 @@ Tests for user tracking functionality.
 """
 
 import pytest
-import json
+import csv
 import tempfile
 from pathlib import Path
 from utils.user_tracker import UserTracker, get_user_tracker
@@ -14,15 +14,12 @@ class TestUserTracker:
     
     @pytest.fixture
     def temp_config_file(self):
-        """Create a temporary config file for testing."""
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
-            test_data = {
-                "tracked_users": [
-                    {"name": "Test User 1", "wallet": "0x1111111111111111111111111111111111111111"},
-                    {"name": "Test User 2", "wallet": "0x2222222222222222222222222222222222222222"}
-                ]
-            }
-            json.dump(test_data, f)
+        """Create a temporary CSV config file for testing."""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['name', 'address'])
+            writer.writeheader()
+            writer.writerow({'name': 'Test User 1', 'address': '0x1111111111111111111111111111111111111111'})
+            writer.writerow({'name': 'Test User 2', 'address': '0x2222222222222222222222222222222222222222'})
             temp_path = f.name
         
         yield temp_path
@@ -123,6 +120,30 @@ class TestUserTracker:
     
     def test_empty_config_file(self):
         """Test handling of non-existent config file."""
-        tracker = UserTracker("nonexistent.json")
+        tracker = UserTracker("nonexistent.csv")
         assert tracker.count() == 0
         assert tracker.get_all_users() == []
+    
+    def test_csv_persistence(self, temp_config_file):
+        """Test that changes are persisted to CSV file."""
+        tracker1 = UserTracker(temp_config_file)
+        tracker1.add_user("Test User 3", "0x3333333333333333333333333333333333333333")
+        
+        # Create new tracker instance to verify persistence
+        tracker2 = UserTracker(temp_config_file)
+        assert tracker2.count() == 3
+        user = tracker2.get_user_by_wallet("0x3333333333333333333333333333333333333333")
+        assert user is not None
+        assert user['name'] == "Test User 3"
+    
+    def test_csv_format(self, temp_config_file):
+        """Test that CSV file has correct format."""
+        with open(temp_config_file, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            
+            assert len(rows) == 2
+            assert 'name' in rows[0]
+            assert 'address' in rows[0]
+            assert rows[0]['name'] == 'Test User 1'
+            assert rows[0]['address'] == '0x1111111111111111111111111111111111111111'

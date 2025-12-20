@@ -144,7 +144,7 @@ def display_conviction_dashboard(time_window: str, min_conviction: str, min_cons
     
     tracked_users = tracker.get_all_users()
     if not tracked_users:
-        st.warning("⚠️ No tracked users! Add traders to `tracked_users.json`")
+        st.warning("⚠️ No tracked users! Add traders to `tracked_users.csv`")
         return
     
     # Load and score trades
@@ -364,14 +364,14 @@ def format_time_ago(timestamp: int) -> str:
         dt = datetime.fromtimestamp(timestamp)
         diff = datetime.now() - dt
         
-        if diff.seconds < 60:
-            return "just now"
-        elif diff.seconds < 3600:
-            return f"{diff.seconds // 60}m ago"
-        elif diff.days == 0:
-            return f"{diff.seconds // 3600}h ago"
-        else:
+        if diff.days > 0:
             return f"{diff.days}d ago"
+        elif diff.seconds >= 3600:
+            return f"{diff.seconds // 3600}h ago"
+        elif diff.seconds >= 60:
+            return f"{diff.seconds // 60}m ago"
+        else:
+            return "just now"
     except:
         return ""
 
