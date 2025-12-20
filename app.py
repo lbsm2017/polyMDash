@@ -24,6 +24,7 @@ st.set_page_config(
 from clients.gamma_client import GammaClient
 from clients.trades_client import TradesClient
 from clients.api_pool import fetch_all_data, APIPool
+from clients.leaderboard_client import LeaderboardClient
 from utils.user_tracker import get_user_tracker
 from algorithms.conviction_scorer import ConvictionScorer
 
@@ -91,6 +92,17 @@ def main():
     # Sidebar
     st.sidebar.title("🎯 Conviction Tracker")
     st.sidebar.markdown("Track high-conviction moves from top traders")
+    st.sidebar.markdown("---")
+    
+    # Trader source selection - FIRST
+    st.sidebar.markdown("**📊 Trader Source**")
+    trader_source = st.sidebar.radio(
+        "Select source:",
+        ["👤 User List", "🏆 Leaderboard"],
+        index=0,
+        help="Choose between your custom list or Polymarket's monthly profit leaderboard"
+    )
+    
     st.sidebar.markdown("---")
     
     # Tracked users display with edit capabilities
@@ -177,7 +189,7 @@ def main():
     st.sidebar.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
     
     # Main content
-    display_conviction_dashboard()
+    display_conviction_dashboard(trader_source)
     
     # Auto-refresh logic
     if auto_refresh:
@@ -186,17 +198,52 @@ def main():
         st.rerun()
 
 
-def display_conviction_dashboard():
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_leaderboard_traders(limit: int = 50) -> List[Dict[str, str]]:
+    """Fetch traders from Polymarket leaderboard."""
+    try:
+        async def fetch():
+            client = LeaderboardClient()
+            return await client.fetch_monthly_profit_leaders(limit)
+        
+        return asyncio.run(fetch())
+    except Exception as e:
+        logger.error(f"Error fetching leaderboard: {e}")
+        return []
+
+
+def display_conviction_dashboard(trader_source: str = "👤 User List"):
     """Main dashboard view showing conviction-weighted markets."""
     
     st.markdown('<div class="main-header">📡 Traders Scanner</div>', unsafe_allow_html=True)
     
-    tracked_users = tracker.get_all_users()
-    if not tracked_users:
-        st.warning("⚠️ No tracked users! Add traders to `tracked_users.csv`")
-        return
+    # Determine which traders to use
+    if trader_source == "🏆 Leaderboard":
+        # Fetch from leaderboard
+        with st.spinner("Fetching leaderboard traders..."):
+            leaderboard_data = fetch_leaderboard_traders(50)
+            
+        if not leaderboard_data:
+            st.error("❌ Failed to fetch leaderboard. Falling back to user list.")
+            tracked_users = tracker.get_all_users()
+            wallet_addresses = tracker.get_wallet_addresses()
+            source_label = "User List (fallback)"
+        else:
+            wallet_addresses = [t['wallet'] for t in leaderboard_data]
+            tracked_users = {t['wallet']: t['name'] for t in leaderboard_data}
+            source_label = "Leaderboard"
+            
+        st.info(f"📊 Using: **{source_label}** ({len(wallet_addresses)} traders)")
+    else:
+        # Use custom user list
+        tracked_users = tracker.get_all_users()
+        if not tracked_users:
+            st.warning("⚠️ No tracked users! Add traders to `tracked_users.csv`")
+            return
+        
+        wallet_addresses = tracker.get_wallet_addresses()
+        st.info(f"📊 Using: **User List** ({len(wallet_addresses)} traders)")
     
-    wallet_addresses = tracker.get_wallet_addresses()
     logger.info(f"Tracking {len(wallet_addresses)} wallets: {wallet_addresses[:3]}...")
     
     # Phase 1: Load trades with high-performance pool
@@ -272,6 +319,11 @@ def display_conviction_dashboard():
     with header_col5:
         st.markdown("**📉 NO Position**")
     st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
+    
+    # Store tracked_users in session state for use in display functions
+    if 'user_lookup' not in st.session_state or st.session_state.get('trader_source') != trader_source:
+        st.session_state.user_lookup = tracked_users if isinstance(tracked_users, dict) else {u['wallet']: u['name'] for u in tracked_users} if isinstance(tracked_users, list) else tracker.get_all_users()
+        st.session_state.trader_source = trader_source
     
     for market in open_markets:
         display_market_card(market, batch_market_data)
@@ -377,8 +429,15 @@ def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
     # Convert to list with names and calculated averages
     result = []
     current_time = datetime.now().timestamp()
+    user_lookup = st.session_state.get('user_lookup', {})
+    
     for wallet, data in user_positions.items():
-        user_name = tracker.get_user_name(wallet)
+        # Get user name from session state or fallback to tracker
+        if isinstance(user_lookup, dict):
+            user_name = user_lookup.get(wallet, wallet[:8])
+        else:
+            user_name = tracker.get_user_name(wallet)
+        
         avg_price = data['weighted_sum'] / data['total_volume'] if data['total_volume'] > 0 else 0
         total_size = data['total_size']
         # Calculate minutes since last trade
@@ -462,7 +521,11 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
     market_url = f"https://polymarket.com/market/{slug}"
     
     # Consensus users
-    user_names = [tracker.get_user_name(w) for w in market['consensus_users'][:3]]
+    user_lookup = st.session_state.get('user_lookup', {})
+    if isinstance(user_lookup, dict):
+        user_names = [user_lookup.get(w, w[:8]) for w in market['consensus_users'][:3]]
+    else:
+        user_names = [tracker.get_user_name(w) for w in market['consensus_users'][:3]]
     users_display = ", ".join(user_names)
     if len(market['consensus_users']) > 3:
         users_display += f" +{len(market['consensus_users']) - 3}"
@@ -563,7 +626,14 @@ def display_trade_row(trade: Dict):
     size = float(trade.get('size', 0))
     volume = price * size
     wallet = trade.get('proxyWallet', '')
-    user_name = tracker.get_user_name(wallet)
+    
+    # Get user name from session state or fallback to tracker
+    user_lookup = st.session_state.get('user_lookup', {})
+    if isinstance(user_lookup, dict):
+        user_name = user_lookup.get(wallet, wallet[:8])
+    else:
+        user_name = tracker.get_user_name(wallet)
+    
     timestamp = trade.get('timestamp', 0)
     
     side_emoji = "🟢" if side == "BUY" else "🔴"
