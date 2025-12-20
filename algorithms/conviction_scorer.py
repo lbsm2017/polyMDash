@@ -126,6 +126,8 @@ class ConvictionScorer:
             'bullish_trades': [],
             'bearish_trades': [],
             'last_activity': 0,
+            'weighted_timestamp_sum': 0,
+            'total_volume': 0,
             'slug': '',
             'market_id': '',
         })
@@ -153,6 +155,10 @@ class ConvictionScorer:
             market['slug'] = slug
             market['market_id'] = trade.get('market', '')
             market['trades'].append(trade)
+            
+            # Track weighted timestamp for recency sorting
+            market['weighted_timestamp_sum'] += timestamp * volume
+            market['total_volume'] += volume
             
             # Track user positions and direction-specific trades
             if is_bullish:
@@ -201,6 +207,10 @@ class ConvictionScorer:
                 consensus_count = num_bearish
                 consensus_users = list(market['users_bearish'])
             
+            # Calculate weighted average timestamp for sorting
+            weighted_avg_time = (market['weighted_timestamp_sum'] / market['total_volume'] 
+                                if market['total_volume'] > 0 else market['last_activity'])
+            
             scored_markets.append({
                 'slug': slug,
                 'market_id': market['market_id'],
@@ -215,10 +225,11 @@ class ConvictionScorer:
                 'total_trades': len(market['trades']),
                 'trades': market['trades'],
                 'last_activity': market['last_activity'],
+                'weighted_avg_time': weighted_avg_time,
             })
         
-        # Sort by conviction score (highest first), then by recency
-        scored_markets.sort(key=lambda x: (x['conviction_score'], x['last_activity']), reverse=True)
+        # Sort by weighted average time (most recent first)
+        scored_markets.sort(key=lambda x: x['weighted_avg_time'], reverse=True)
         
         return scored_markets
     
