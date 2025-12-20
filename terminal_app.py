@@ -125,6 +125,7 @@ async def fetch_recent_activities():
             size = trade.get('size', 0)
             volume = price * size
             timestamp = trade.get('timestamp', 0)
+            market_slug = trade.get('slug', 'Unknown Market')
             
             # Format timestamp
             trade_time = datetime.fromtimestamp(timestamp)
@@ -154,6 +155,8 @@ async def fetch_recent_activities():
                 f"{Style.BRIGHT}{format_currency(volume):>12}{Style.RESET_ALL} "
                 f"{Style.DIM}({size:.0f} @ ${price:.3f}){Style.RESET_ALL}"
             )
+            # Market name on separate line for readability
+            print(f"    {Style.DIM}└─ {market_slug[:90]}{Style.RESET_ALL}")
 
 
 async def main():
