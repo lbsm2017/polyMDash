@@ -207,12 +207,16 @@ def display_conviction_dashboard():
         scorer = ConvictionScorer(tracker.get_wallet_addresses())
         scored_markets = scorer.score_markets(trades)
     
-    # Filter out closed markets by checking market data
-    open_markets = []
-    for market in scored_markets:
-        market_data = get_market_data(market['slug'])
-        if market_data is not None:  # None means market is closed/inactive
-            open_markets.append(market)
+    # Fetch market data for all markets in parallel
+    with st.spinner("Fetching current market prices..."):
+        market_slugs = [m['slug'] for m in scored_markets]
+        batch_market_data = get_batch_market_data(market_slugs)
+    
+    # Filter out closed markets
+    open_markets = [
+        market for market in scored_markets 
+        if batch_market_data.get(market['slug']) is not None
+    ]
     
     if not open_markets:
         st.info("No open markets found. All markets with activity are currently closed.")
@@ -232,7 +236,7 @@ def display_conviction_dashboard():
     st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
     for market in open_markets:
-        display_market_card(market)
+        display_market_card(market, batch_market_data)
 
 
 def calculate_side_prices(trades: List[Dict], is_yes_side: bool) -> Tuple[float, float]:
@@ -283,7 +287,7 @@ def calculate_side_prices(trades: List[Dict], is_yes_side: bool) -> Tuple[float,
 
 
 
-def display_market_card(market: Dict):
+def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict]]):
     """Display a single market in compact tabular format."""
     
     direction = market['direction']
@@ -298,8 +302,8 @@ def display_market_card(market: Dict):
     direction_emoji = "📈" if direction == "BULLISH" else "📉"
     direction_color = "#38ef7d" if direction == "BULLISH" else "#f45c43"
     
-    # Fetch current market prices
-    market_data = get_market_data(slug)
+    # Get current market prices from batch data
+    market_data = batch_market_data.get(slug)
     yes_price = market_data.get('yes_price', 0.5) if market_data else 0.5
     no_price = market_data.get('no_price', 0.5) if market_data else 0.5
     
@@ -398,25 +402,38 @@ def display_trade_row(trade: Dict):
 
 @st.cache_data(ttl=30)
 def load_tracked_trades(time_window: str) -> List[Dict]:
-    """Load trades for all tracked users."""
+    """Load trades for all tracked users in parallel."""
     
     minutes = parse_time_window(time_window)
     cutoff = int((datetime.now() - timedelta(minutes=minutes)).timestamp())
     wallet_addresses = tracker.get_wallet_addresses()
     
+    if not wallet_addresses:
+        return []
+    
     try:
-        async def fetch():
+        async def fetch_all():
             async with TradesClient() as client:
+                # Fetch all users' trades in parallel
+                tasks = [
+                    client.get_user_trades(wallet, limit=200) 
+                    for wallet in wallet_addresses
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Flatten and filter trades
                 all_trades = []
-                for wallet in wallet_addresses:
-                    trades = await client.get_user_trades(wallet, limit=200)
-                    if trades:
+                for trades in results:
+                    if isinstance(trades, list):
                         for trade in trades:
                             if isinstance(trade, dict) and trade.get('timestamp', 0) >= cutoff:
                                 all_trades.append(trade)
+                    elif isinstance(trades, Exception):
+                        logger.warning(f"Error fetching trades: {trades}")
+                
                 return all_trades
         
-        return asyncio.run(fetch())
+        return asyncio.run(fetch_all())
     except Exception as e:
         logger.error(f"Error loading trades: {e}")
         return []
@@ -457,6 +474,104 @@ def get_market_data(slug: str) -> Optional[Dict]:
     except Exception as e:
         logger.debug(f"Could not fetch market data for {slug}: {e}")
         return None
+
+
+@st.cache_data(ttl=60)
+def get_batch_market_data(slugs: List[str]) -> Dict[str, Optional[Dict]]:
+    """Fetch market data for multiple markets in parallel."""
+    if not slugs:
+        return {}
+    
+    try:
+        async def fetch_all():
+            async with GammaClient() as client:
+                # Fetch all markets in parallel
+                tasks = [client.get_market_by_slug(slug) for slug in slugs]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                market_data = {}
+                for slug, market in zip(slugs, results):
+                    if isinstance(market, dict):
+                        # Check if market is closed
+                        is_closed = market.get('closed', False)
+                        is_active = market.get('active', True)
+                        
+                        # Filter out closed/inactive markets
+                        if is_closed or not is_active:
+                            market_data[slug] = None
+                            continue
+                        
+                        prices = market.get('outcomePrices', [0.5, 0.5])
+                        if isinstance(prices, str):
+                            import json
+                            prices = json.loads(prices)
+                        
+                        market_data[slug] = {
+                            'yes_price': float(prices[0]) if prices else 0.5,
+                            'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
+                            'volume': market.get('volume', 0),
+                            'liquidity': market.get('liquidity', 0),
+                            'active': is_active,
+                            'closed': is_closed,
+                        }
+                    else:
+                        market_data[slug] = None
+                
+                return market_data
+        
+        return asyncio.run(fetch_all())
+    except Exception as e:
+        logger.error(f"Error fetching batch market data: {e}")
+        return {slug: None for slug in slugs}
+
+
+@st.cache_data(ttl=60)
+def get_batch_market_data(slugs: List[str]) -> Dict[str, Optional[Dict]]:
+    """Fetch market data for multiple markets in parallel."""
+    if not slugs:
+        return {}
+    
+    try:
+        async def fetch_all():
+            async with GammaClient() as client:
+                # Fetch all markets in parallel
+                tasks = [client.get_market_by_slug(slug) for slug in slugs]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                market_data = {}
+                for slug, market in zip(slugs, results):
+                    if isinstance(market, dict):
+                        # Check if market is closed
+                        is_closed = market.get('closed', False)
+                        is_active = market.get('active', True)
+                        
+                        # Filter out closed/inactive markets
+                        if is_closed or not is_active:
+                            market_data[slug] = None
+                            continue
+                        
+                        prices = market.get('outcomePrices', [0.5, 0.5])
+                        if isinstance(prices, str):
+                            import json
+                            prices = json.loads(prices)
+                        
+                        market_data[slug] = {
+                            'yes_price': float(prices[0]) if prices else 0.5,
+                            'no_price': float(prices[1]) if len(prices) > 1 else 0.5,
+                            'volume': market.get('volume', 0),
+                            'liquidity': market.get('liquidity', 0),
+                            'active': is_active,
+                            'closed': is_closed,
+                        }
+                    else:
+                        market_data[slug] = None
+                
+                return market_data
+        
+        return asyncio.run(fetch_all())
+    except Exception as e:
+        logger.error(f"Error fetching batch market data: {e}")
+        return {slug: None for slug in slugs}
 
 
 def parse_time_window(window: str) -> int:
