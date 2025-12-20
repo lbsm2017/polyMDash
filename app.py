@@ -460,17 +460,13 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         st.caption(f"Score: {score:.1f}")
     
     with col3:
-        # YES position with avg/last prices
+        # YES position
         yes_bg = "rgba(56, 239, 125, 0.1)"
         st.markdown(f"""
         <div style="background: {yes_bg}; padding: 0.3rem; border-radius: 0.3rem;">
-            <div style="text-align: center; margin-bottom: 0.2rem;">
+            <div style="text-align: center; margin-bottom: 0.3rem;">
                 <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
                 <div style="font-size: 1.3rem; font-weight: 700; color: #38ef7d; line-height: 1;">{yes_price:.1%}</div>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; margin-bottom: 0.15rem; line-height: 1.1;">
-                <span style="color: #7f8c8d;">Avg: <strong style="color: #38ef7d;">{yes_avg:.1%}</strong></span>
-                <span style="color: #7f8c8d;">Last: <strong style="color: #38ef7d;">{yes_last:.1%}</strong></span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
                 <span style="font-weight: 600;">👥 {yes_traders}</span>
@@ -480,17 +476,13 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         """, unsafe_allow_html=True)
     
     with col4:
-        # NO position with avg/last prices
+        # NO position
         no_bg = "rgba(244, 92, 67, 0.1)"
         st.markdown(f"""
         <div style="background: {no_bg}; padding: 0.3rem; border-radius: 0.3rem;">
-            <div style="text-align: center; margin-bottom: 0.2rem;">
+            <div style="text-align: center; margin-bottom: 0.3rem;">
                 <div style="font-size: 0.6rem; color: #7f8c8d; margin-bottom: 0.05rem; line-height: 1;">CURRENT</div>
                 <div style="font-size: 1.3rem; font-weight: 700; color: #f45c43; line-height: 1;">{no_price:.1%}</div>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; margin-bottom: 0.15rem; line-height: 1.1;">
-                <span style="color: #7f8c8d;">Avg: <strong style="color: #f45c43;">{no_avg:.1%}</strong></span>
-                <span style="color: #7f8c8d;">Last: <strong style="color: #f45c43;">{no_last:.1%}</strong></span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 0.65rem; line-height: 1.1;">
                 <span style="font-weight: 600;">👥 {no_traders}</span>
