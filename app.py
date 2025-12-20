@@ -369,11 +369,25 @@ def display_trades_by_market(trades: List[Dict], tracked_users: bool):
             for t in trades
         )
         
+        # Detect patterns for this market
+        all_market_trades = [t for trades_list in actions.values() for t in trades_list]
+        pattern_info = detect_market_patterns(all_market_trades)
+        patterns = pattern_info.get('patterns', [])
+        
+        # Build header with pattern badges
+        pattern_badges = ' '.join(patterns[:3]) if patterns else ''
+        header_text = f"**{market_slug[:90]}** · {total_trades} trades · ${total_vol:.0f}"
+        if pattern_badges:
+            header_text += f" · {pattern_badges}"
+        
         # Compact market header
-        with st.expander(
-            f"**{market_slug[:90]}** · {total_trades} trades · ${total_vol:.0f}",
-            expanded=False
-        ):
+        with st.expander(header_text, expanded=False):
+            # Show all patterns if more than 3
+            if len(patterns) > 3:
+                st.info(' · '.join(patterns))
+            elif patterns:
+                st.info(' · '.join(patterns))
+            
             # Action breakdown in compact grid
             action_order = ['BUY YES', 'BUY NO', 'SELL YES', 'SELL NO']
             action_colors = {
@@ -419,15 +433,34 @@ def display_trades_by_market(trades: List[Dict], tracked_users: bool):
                     user_name = tracker.get_user_name(user) if tracked_users else f"{user[:6]}...{user[-4:]}"
                     timestamp = trade.get('timestamp', 0)
                     
+                    # Build indicators
+                    indicators = []
+                    if volume > 1000:
+                        indicators.append('🔥')
+                    if price > 0.9 or price < 0.1:
+                        indicators.append('💎')
+                    if 0.45 <= price <= 0.55:
+                        indicators.append('🎯')
+                    
                     if timestamp:
                         dt = datetime.fromtimestamp(timestamp)
                         time_ago = format_time_ago(dt)
+                        hour = dt.hour
+                        if 6 <= hour < 12:
+                            indicators.append('🌅')
+                        elif 18 <= hour < 24:
+                            indicators.append('🌆')
+                        elif hour < 6:
+                            indicators.append('🌙')
                     else:
                         time_ago = ""
+                    
+                    indicator_str = ' '.join(indicators)
                     
                     st.caption(
                         f"💰 ${volume:.2f} ({price:.3f} × {size:.0f}) · "
                         f"👤 {user_name} · 🕒 {time_ago}"
+                        f"{' · ' + indicator_str if indicator_str else ''}"
                     )
                 
                 if len(trades_list) > 5:
@@ -443,6 +476,112 @@ def categorize_outcome(outcome: str) -> str:
         return 'NO'
     else:
         return 'Other'
+
+
+def detect_market_patterns(all_trades: List[Dict]) -> Dict[str, str]:
+    """Detect interesting patterns in market trades."""
+    if not all_trades:
+        return {}
+    
+    patterns = []
+    
+    # Sort by timestamp
+    sorted_trades = sorted(all_trades, key=lambda x: x.get('timestamp', 0))
+    
+    # Price trend (first vs last trade)
+    if len(sorted_trades) >= 2:
+        first_price = float(sorted_trades[0].get('price', 0))
+        last_price = float(sorted_trades[-1].get('price', 0))
+        price_change = (last_price - first_price) / max(first_price, 0.001)
+        
+        if abs(price_change) > 0.05:  # >5% change
+            if price_change > 0:
+                patterns.append('📈 Price trending UP')
+            else:
+                patterns.append('📉 Price trending DOWN')
+    
+    # High conviction trades (>$1000)
+    high_value_trades = [
+        t for t in all_trades 
+        if float(t.get('price', 0)) * float(t.get('size', 0)) > 1000
+    ]
+    if high_value_trades:
+        patterns.append(f'🔥 High conviction ({len(high_value_trades)} trades >$1K)')
+    
+    # Rapid fire (multiple trades within 5 min)
+    rapid_fire_count = 0
+    for i in range(len(sorted_trades) - 1):
+        t1 = sorted_trades[i].get('timestamp', 0)
+        t2 = sorted_trades[i + 1].get('timestamp', 0)
+        if abs(t2 - t1) < 300:  # 5 minutes
+            rapid_fire_count += 1
+    if rapid_fire_count >= 3:
+        patterns.append(f'⚡ Rapid fire ({rapid_fire_count} within 5min)')
+    
+    # Precise entry (price near 0.5)
+    precise_entries = [
+        t for t in all_trades
+        if 0.45 <= float(t.get('price', 0)) <= 0.55
+    ]
+    if precise_entries:
+        patterns.append(f'🎯 Precise entry ({len(precise_entries)} near 50/50)')
+    
+    # Diamond hands (price at extremes)
+    extreme_trades = [
+        t for t in all_trades
+        if float(t.get('price', 0)) > 0.9 or float(t.get('price', 0)) < 0.1
+    ]
+    if extreme_trades:
+        patterns.append(f'💎 Diamond hands ({len(extreme_trades)} at extremes)')
+    
+    # Calculate average volume for spike detection
+    volumes = [float(t.get('price', 0)) * float(t.get('size', 0)) for t in all_trades]
+    avg_volume = sum(volumes) / len(volumes) if volumes else 0
+    max_volume = max(volumes) if volumes else 0
+    
+    if max_volume > avg_volume * 3:
+        patterns.append('⚠️ Sudden spike (3x avg volume)')
+    
+    # Contrarian move (buy when mostly selling or vice versa)
+    buys = [t for t in all_trades if t.get('side') == 'BUY']
+    sells = [t for t in all_trades if t.get('side') == 'SELL']
+    total = len(all_trades)
+    
+    if total > 5:  # Need enough trades to be meaningful
+        buy_pct = len(buys) / total
+        if buy_pct > 0.9 or buy_pct < 0.1:
+            if buy_pct > 0.9:
+                patterns.append('🚨 Contrarian alert (90%+ buying)')
+            else:
+                patterns.append('🚨 Contrarian alert (90%+ selling)')
+    
+    # FOMO alert (rapid sequence of same-side trades)
+    if len(sorted_trades) >= 4:
+        same_side_streak = 1
+        max_streak = 1
+        for i in range(1, len(sorted_trades)):
+            if sorted_trades[i].get('side') == sorted_trades[i-1].get('side'):
+                same_side_streak += 1
+                max_streak = max(max_streak, same_side_streak)
+            else:
+                same_side_streak = 1
+        if max_streak >= 4:
+            patterns.append(f'🎪 FOMO alert ({max_streak} same-side in a row)')
+    
+    # Time-based activity
+    morning = [t for t in all_trades if 6 <= datetime.fromtimestamp(t.get('timestamp', 0)).hour < 12]
+    evening = [t for t in all_trades if 18 <= datetime.fromtimestamp(t.get('timestamp', 0)).hour < 24]
+    night = [t for t in all_trades if datetime.fromtimestamp(t.get('timestamp', 0)).hour < 6]
+    
+    total_trades = len(all_trades)
+    if morning and len(morning) / total_trades > 0.5:
+        patterns.append('🌅 Mostly morning activity')
+    if evening and len(evening) / total_trades > 0.5:
+        patterns.append('🌆 Mostly evening activity')
+    if night and len(night) / total_trades > 0.3:
+        patterns.append('🌙 Late night activity')
+    
+    return {'patterns': patterns, 'trade_count': total}
 
 
 def format_time_ago(dt: datetime) -> str:
