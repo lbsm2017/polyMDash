@@ -255,11 +255,12 @@ def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
         is_yes_side: True for YES side, False for NO side
         
     Returns:
-        List of tuples: (user_name, avg_price, total_size)
+        List of tuples: (user_name, avg_price, total_size, minutes_ago)
     """
     from collections import defaultdict
+    from datetime import datetime
     
-    user_positions = defaultdict(lambda: {'total_volume': 0, 'total_size': 0, 'weighted_sum': 0})
+    user_positions = defaultdict(lambda: {'total_volume': 0, 'total_size': 0, 'weighted_sum': 0, 'last_timestamp': 0})
     
     for trade in trades:
         side = trade.get('side', '').upper()
@@ -273,18 +274,25 @@ def get_user_positions(trades: List[Dict], is_yes_side: bool) -> List[tuple]:
             price = float(trade.get('price', 0))
             size = float(trade.get('size', 0))
             volume = price * size
+            timestamp = trade.get('timestamp', 0)
             
             user_positions[wallet]['weighted_sum'] += price * volume
             user_positions[wallet]['total_volume'] += volume
             user_positions[wallet]['total_size'] += size
+            # Track most recent trade for this user
+            if timestamp > user_positions[wallet]['last_timestamp']:
+                user_positions[wallet]['last_timestamp'] = timestamp
     
     # Convert to list with names and calculated averages
     result = []
+    current_time = datetime.now().timestamp()
     for wallet, data in user_positions.items():
         user_name = tracker.get_user_name(wallet)
         avg_price = data['weighted_sum'] / data['total_volume'] if data['total_volume'] > 0 else 0
         total_size = data['total_size']
-        result.append((user_name, avg_price, total_size))
+        # Calculate minutes since last trade
+        minutes_ago = int((current_time - data['last_timestamp']) / 60) if data['last_timestamp'] > 0 else 0
+        result.append((user_name, avg_price, total_size, minutes_ago))
     
     # Sort by total size (largest positions first)
     result.sort(key=lambda x: x[2], reverse=True)
@@ -390,12 +398,14 @@ def display_market_card(market: Dict, batch_market_data: Dict[str, Optional[Dict
         positions_html = '<div style="font-size: 0.75rem; line-height: 1.4; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', sans-serif; color: #5a6c7d;">'
         
         if yes_positions:
-            for name, price, size in yes_positions[:5]:  # Show up to 5 users
-                positions_html += f'<div style="margin: 0.1rem 0;">🟢 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+            for name, price, size, minutes_ago in yes_positions[:5]:  # Show up to 5 users
+                time_color = "#27ae60" if minutes_ago < 60 else "#95a5a6" if minutes_ago < 360 else "#7f8c8d"
+                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{minutes_ago}m]</span> 🟢 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
         
         if no_positions:
-            for name, price, size in no_positions[:5]:  # Show up to 5 users
-                positions_html += f'<div style="margin: 0.1rem 0;">🔴 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
+            for name, price, size, minutes_ago in no_positions[:5]:  # Show up to 5 users
+                time_color = "#e74c3c" if minutes_ago < 60 else "#95a5a6" if minutes_ago < 360 else "#7f8c8d"
+                positions_html += f'<div style="margin: 0.1rem 0;"><span style="color: {time_color}; font-weight: 500;">[{minutes_ago}m]</span> 🔴 <strong style="color: #2c3e50;">{name}</strong> · ${size:,.0f} @ {price:.1%}</div>'
         
         positions_html += '</div>'
         st.markdown(positions_html, unsafe_allow_html=True)
