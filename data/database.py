@@ -186,7 +186,7 @@ class Database:
             market_data.get('liquidity'),
             market_data.get('volume'),
             market_data.get('volume24hr'),
-            datetime.now()
+            datetime.now().isoformat()
         ))
         
         self.conn.commit()
@@ -332,7 +332,7 @@ class Database:
             stats.get('trade_count', 0),
             stats.get('markets_traded', 0),
             stats.get('last_trade_time'),
-            datetime.now()
+            datetime.now().isoformat()
         ))
         
         self.conn.commit()
@@ -377,7 +377,7 @@ class Database:
             price_data.get('price'),
             price_data.get('volume'),
             price_data.get('liquidity'),
-            price_data.get('timestamp', datetime.now())
+            price_data.get('timestamp', datetime.now().isoformat())
         ))
         
         self.conn.commit()

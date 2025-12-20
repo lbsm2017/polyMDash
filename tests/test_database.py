@@ -252,7 +252,7 @@ class TestDatabase:
             'price': 0.6,
             'volume': 1000,
             'liquidity': 5000,
-            'timestamp': datetime.now()
+            'timestamp': datetime.now().isoformat()
         }
         
         temp_db.add_price_update(price_data)
