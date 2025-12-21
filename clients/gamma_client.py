@@ -31,7 +31,12 @@ class GammaClient:
     async def __aenter__(self):
         """Async context manager entry."""
         if self._own_session:
-            self.session = aiohttp.ClientSession()
+            # Disable auto-decompression to avoid Brotli issues with large responses
+            connector = aiohttp.TCPConnector(limit=100)
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                headers={'Accept-Encoding': 'gzip, deflate'}  # Disable Brotli
+            )
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -53,9 +58,12 @@ class GammaClient:
         url = f"{self.BASE_URL}{endpoint}"
         
         try:
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                 response.raise_for_status()
                 return await response.json()
+        except aiohttp.ClientPayloadError as e:
+            logger.error(f"Payload error (possibly compression issue): {e}")
+            raise
         except aiohttp.ClientError as e:
             logger.error(f"API request failed: {e}")
             raise
@@ -98,6 +106,31 @@ class GammaClient:
             
         logger.info(f"Fetching markets with params: {params}")
         return await self._request("/markets", params)
+        
+    async def get_breaking_markets(self, limit: int = 50) -> List[Dict]:
+        """
+        Fetch breaking/trending markets.
+        
+        Args:
+            limit: Number of markets to return
+            
+        Returns:
+            List of market dictionaries
+        """
+        params = {
+            "limit": limit,
+            "active": "true",
+            "closed": "false"
+        }
+        
+        logger.info(f"Fetching breaking markets with limit: {limit}")
+        try:
+            # Try the events endpoint which often has breaking news
+            return await self._request("/events", params)
+        except Exception as e:
+            logger.warning(f"Failed to fetch breaking markets: {e}")
+            # Fallback to regular markets sorted by volume
+            return await self.get_markets(limit=limit, active=True, closed=False, order_by="volume24hr")
         
     async def get_market_by_id(self, market_id: str) -> Dict:
         """

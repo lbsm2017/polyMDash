@@ -90,11 +90,30 @@ def main():
     """Main application entry point."""
     
     # Sidebar
-    st.sidebar.title("🎯 Conviction Tracker")
+    st.sidebar.title("PolyMarket Dashboard")
+    st.sidebar.markdown("Advanced Trading Analytics")
+    st.sidebar.markdown("---")
+    
+    # Strategy Selection - FIRST
+    st.sidebar.markdown("**Strategy**")
+    strategy = st.sidebar.radio(
+        "Select Strategy:",
+        ["Conviction Tracker", "Pullback Hunter"],
+        index=0,
+        help="Choose trading strategy"
+    )
+    st.sidebar.markdown("---")
+    
+    # Route to appropriate strategy
+    if strategy == "Pullback Hunter":
+        render_pullback_hunter()
+        return
+    
+    # Continue with Conviction Tracker
     st.sidebar.markdown("Track high-conviction moves from top traders")
     st.sidebar.markdown("---")
     
-    # Trader source selection - FIRST
+    # Trader source selection
     st.sidebar.markdown("**📊 Trader Source**")
     trader_source = st.sidebar.radio(
         "Select source:",
@@ -859,6 +878,205 @@ def format_time_ago(timestamp: int) -> str:
             return "just now"
     except:
         return ""
+
+
+# ============================================================================
+# PULLBACK HUNTER STRATEGY
+# ============================================================================
+
+def render_pullback_hunter():
+    """Render the Pullback Hunter dashboard page."""
+    
+    st.title("🎯 Pullback Hunter")
+    st.markdown("**Strategy**: Surf the last mile - markets with strong momentum toward 100% or 0% expiring soon")
+    st.markdown("---")
+    
+    # Simple controls
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        max_expiry_hours = st.number_input("Max Hours to Expiry", min_value=1, max_value=720, value=72)
+    
+    with col2:
+        min_extremity = st.slider(
+            "Min Extremity (Distance from 50%)", 
+            min_value=0.15, 
+            max_value=0.45, 
+            value=0.25, 
+            step=0.05,
+            help="Only show markets this far from 50% (0.25 = markets >75% or <25%)"
+        )
+    
+    with col3:
+        limit = st.number_input("Max Markets to Scan", min_value=10, max_value=1000, value=500)
+    
+    st.markdown("---")
+    
+    # Scan button
+    if st.button("Scan Markets", type="primary", use_container_width=True):
+        with st.spinner("Scanning markets..."):
+            try:
+                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit)
+                st.session_state['opportunities'] = opportunities
+                st.session_state['scan_time'] = datetime.now()
+            except Exception as e:
+                logger.error(f"Scan error: {e}", exc_info=True)
+                st.error(f"Error: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+                return
+    
+    # Display results
+    if 'opportunities' in st.session_state:
+        opportunities = st.session_state['opportunities']
+        scan_time = st.session_state.get('scan_time', datetime.now())
+        
+        st.success(f"Found {len(opportunities)} opportunities (scanned at {scan_time.strftime('%H:%M:%S')})")
+        
+        if opportunities:
+            display_pullback_table(opportunities)
+        else:
+            st.warning("No opportunities found. Try adjusting filters.")
+    else:
+        st.info("Click 'Scan Markets' to start")
+
+
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int) -> List[Dict]:
+    """Scan markets for momentum opportunities toward extremes."""
+    
+    async def fetch():
+        async with GammaClient() as client:
+            markets = await client.get_markets(limit=limit, active=True, closed=False, order_by="volume24hr")
+            if not markets:
+                return []
+            
+            logger.info(f"Fetched {len(markets)} markets")
+            
+            # Debug: Check first few markets for data structure
+            if markets and len(markets) > 0:
+                sample = markets[0]
+                logger.info(f"Sample market keys: {list(sample.keys())[:20]}")
+                logger.info(f"Sample has endDate: {'endDate' in sample}")
+                logger.info(f"Sample has end_date_iso: {'end_date_iso' in sample}")
+                logger.info(f"Sample has outcomePrices: {'outcomePrices' in sample}")
+                logger.info(f"Sample outcomes structure: {sample.get('outcomes', [])}")
+                
+            filtered = [m for m in markets if not any(ex in (m.get('slug', '') or '').lower() for ex in {'nba', 'nfl', 'nhl', 'mlb', 'ufc', 'boxing'})]
+            logger.info(f"After filtering sports: {len(filtered)} markets")
+            
+            opportunities = []
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            
+            extreme_count = 0
+            expiry_count = 0
+            
+            for market in filtered:
+                # Get prices from outcomes array
+                outcomes = market.get('outcomes', [])
+                if not outcomes or len(outcomes) < 2:
+                    continue
+                
+                # Extract YES price from first outcome
+                try:
+                    yes_price = float(outcomes[0].get('price', 0.5))
+                except (ValueError, TypeError, AttributeError):
+                    yes_price = 0.5
+                
+                is_extreme_yes = yes_price >= (0.5 + min_extremity)
+                is_extreme_no = yes_price <= (0.5 - min_extremity)
+                
+                if not (is_extreme_yes or is_extreme_no):
+                    continue
+                
+                extreme_count += 1
+                
+                # Try different possible field names for end date
+                end_date = market.get('end_date_iso') or market.get('endDate') or market.get('end_date')
+                if not end_date:
+                    logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - no end date field")
+                    continue
+                
+                try:
+                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                    hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    if hours_to_expiry <= 0 or hours_to_expiry > max_expiry_hours:
+                        logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - hours={hours_to_expiry:.1f}, max={max_expiry_hours}")
+                        continue
+                except Exception as e:
+                    logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - date parse error: {e}")
+                    continue
+                
+                expiry_count += 1
+                
+                # Get volume 
+                volume_24h = float(market.get('volume') or 0)
+                distance_from_50 = abs(yes_price - 0.5)
+                urgency_score = (max_expiry_hours - hours_to_expiry) / max_expiry_hours
+                volume_score = min(volume_24h / 10000, 1.0)
+                score = (distance_from_50 * 40) + (urgency_score * 35) + (volume_score * 25)
+                
+                opportunities.append({
+                    'question': market.get('question', 'Unknown'),
+                    'slug': market.get('slug', ''),
+                    'url': f"https://polymarket.com/market/{market.get('slug', '')}",
+                    'current_prob': yes_price,
+                    'hours_to_expiry': hours_to_expiry,
+                    'end_date': end_dt,
+                    'volume_24h': volume_24h,
+                    'score': score,
+                    'direction': 'YES' if is_extreme_yes else 'NO'
+                })
+            
+            opportunities.sort(key=lambda x: x['score'], reverse=True)
+            logger.info(f"Filtering summary: {len(filtered)} total → {extreme_count} extreme → {expiry_count} within expiry → {len(opportunities)} final")
+            return opportunities
+    
+    return asyncio.run(fetch())
+
+
+def display_pullback_table(opportunities: List[Dict]):
+    """Display opportunities in a table."""
+    
+    st.markdown("### Momentum Opportunities")
+    cols = st.columns([3, 1.2, 1.2, 1.5, 1.5, 1])
+    cols[0].markdown("**Market**")
+    cols[1].markdown("**Current**")
+    cols[2].markdown("**Direction**")
+    cols[3].markdown("**Volume 24h**")
+    cols[4].markdown("**Expires**")
+    cols[5].markdown("**Score**")
+    st.markdown("---")
+    
+    for opp in opportunities[:50]:
+        cols = st.columns([3, 1.2, 1.2, 1.5, 1.5, 1])
+        question = opp['question'][:60] + "..." if len(opp['question']) > 60 else opp['question']
+        cols[0].markdown(f"[{question}]({opp['url']})")
+        
+        prob = opp['current_prob']
+        prob_color = "#27ae60" if prob > 0.5 else "#e74c3c"
+        cols[1].markdown(f"<span style='color: {prob_color}; font-weight: bold;'>{prob:.1%}</span>", unsafe_allow_html=True)
+        
+        direction = opp['direction']
+        direction_emoji = "📈" if direction == "YES" else "📉"
+        direction_color = "#27ae60" if direction == "YES" else "#e74c3c"
+        cols[2].markdown(f"<span style='color: {direction_color}; font-weight: bold;'>{direction_emoji} {direction}</span>", unsafe_allow_html=True)
+        
+        cols[3].markdown(f"${opp['volume_24h']:,.0f}")
+        
+        hours = opp['hours_to_expiry']
+        exp_date = opp['end_date'].strftime('%m/%d %H:%M')
+        if hours < 24:
+            time_str, time_color = f"{int(hours)}h", "#e74c3c"
+        elif hours < 72:
+            time_str, time_color = f"{hours/24:.1f}d", "#f39c12"
+        else:
+            time_str, time_color = f"{int(hours/24)}d", "#7f8c8d"
+        
+        cols[4].markdown(f"<span style='color: {time_color}; font-weight: 600;'>{time_str}</span>", unsafe_allow_html=True)
+        cols[4].caption(exp_date)
+        cols[5].markdown(f"**{opp['score']:.0f}**")
+        st.markdown("---")
 
 
 if __name__ == "__main__":

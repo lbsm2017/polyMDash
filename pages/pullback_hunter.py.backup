@@ -1,0 +1,164 @@
+"""
+Pullback Hunter Dashboard Page
+Identifies momentum pullback opportunities in expiring markets.
+"""
+
+import streamlit as st
+from datetime import datetime, timedelta, timezone
+import asyncio
+from typing import List, Dict
+import logging
+
+from clients.gamma_client import GammaClient
+from algorithms.pullback_scanner import PullbackScanner
+
+logger = logging.getLogger(__name__)
+
+
+def render_pullback_hunter():
+    """Render the Pullback Hunter dashboard page."""
+    
+    # Force visible output - DEBUG
+    st.title("🎯 Pullback Hunter")
+    st.write("DEBUG: Function called successfully")
+    
+    st.markdown("**Strategy**: Identify high-momentum markets near expiration with pullback opportunities")
+    
+    st.markdown("---")
+    
+    # Simple controls
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        max_expiry_hours = st.number_input("Max Hours to Expiry", min_value=1, max_value=168, value=72)
+    
+    with col2:
+        min_prob = st.slider("Min Probability", min_value=0.5, max_value=0.95, value=0.75, step=0.05)
+    
+    with col3:
+        limit = st.number_input("Max Markets", min_value=10, max_value=500, value=100)
+    
+    st.markdown("---")
+    
+    # Scan button
+    if st.button("Scan Markets", type="primary", use_container_width=True):
+        with st.spinner("Scanning markets..."):
+            try:
+                opportunities = scan_markets(max_expiry_hours, min_prob, limit)
+                st.session_state['opportunities'] = opportunities
+                st.session_state['scan_time'] = datetime.now()
+            except Exception as e:
+                logger.error(f"Scan error: {e}", exc_info=True)
+                st.error(f"Error: {str(e)}")
+                return
+    
+    # Display results
+    if 'opportunities' in st.session_state:
+        opportunities = st.session_state['opportunities']
+        scan_time = st.session_state.get('scan_time', datetime.now())
+        
+        st.success(f"Found {len(opportunities)} opportunities (scanned at {scan_time.strftime('%H:%M:%S')})")
+        
+        if opportunities:
+            display_table(opportunities)
+        else:
+            st.warning("No opportunities found. Try adjusting filters.")
+    else:
+        st.info("Click 'Scan Markets' to start")
+
+
+def scan_markets(max_expiry_hours: int, min_prob: float, limit: int) -> List[Dict]:
+    """Scan markets for pullback opportunities."""
+    
+    async def fetch():
+        async with GammaClient() as client:
+            # Fetch markets
+            markets = await client.get_markets(
+                limit=limit,
+                active=True,
+                closed=False,
+                order_by="volume24hr"
+            )
+            
+            if not markets:
+                return []
+            
+            logger.info(f"Fetched {len(markets)} markets")
+            
+            # Filter out sports/crypto
+            filtered = []
+            excluded = {'crypto', 'sports', 'nba', 'nfl', 'nhl', 'mlb', 'soccer', 
+                       'football', 'basketball', 'baseball', 'hockey'}
+            
+            for m in markets:
+                slug = (m.get('slug', '') or '').lower()
+                question = (m.get('question', '') or '').lower()
+                
+                if not any(ex in slug or ex in question for ex in excluded):
+                    filtered.append(m)
+            
+            logger.info(f"After filtering: {len(filtered)} markets")
+            
+            # Scan for pullbacks
+            scanner = PullbackScanner()
+            scanner.MAX_EXPIRATION_HOURS = max_expiry_hours
+            scanner.MIN_PROBABILITY = min_prob
+            
+            opportunities = scanner.scan_markets(filtered, price_history=None)
+            logger.info(f"Found {len(opportunities)} opportunities")
+            
+            return opportunities
+    
+    return asyncio.run(fetch())
+
+
+def display_table(opportunities: List[Dict]):
+    """Display opportunities in a table."""
+    
+    st.markdown("### Markets")
+    
+    # Table header
+    cols = st.columns([3, 1.5, 1.5, 1.5, 1])
+    cols[0].markdown("**Market**")
+    cols[1].markdown("**Current Prob**")
+    cols[2].markdown("**Pullback**")
+    cols[3].markdown("**Expires**")
+    cols[4].markdown("**Score**")
+    
+    st.markdown("---")
+    
+    # Display rows
+    for i, opp in enumerate(opportunities[:50]):
+        cols = st.columns([3, 1.5, 1.5, 1.5, 1])
+        
+        # Market name
+        question = opp['question'][:60] + "..." if len(opp['question']) > 60 else opp['question']
+        cols[0].markdown(f"[{question}]({opp['url']})")
+        
+        # Current probability
+        prob = opp['current_prob']
+        cols[1].markdown(f"**{prob:.1%}**")
+        
+        # Pullback
+        pullback = opp['pullback_pct']
+        cols[2].markdown(f"{pullback:.1%}")
+        
+        # Expiration
+        hours = opp['hours_to_expiry']
+        exp_date = opp['end_date'].strftime('%Y-%m-%d %H:%M')
+        
+        if hours < 24:
+            time_str = f"{int(hours)}h"
+        else:
+            days = int(hours / 24)
+            time_str = f"{days}d"
+        
+        cols[3].markdown(f"{time_str}")
+        cols[3].caption(exp_date)
+        
+        # Score
+        score = opp['score']
+        cols[4].markdown(f"**{score:.0f}**")
+        
+        st.markdown("---")
+
