@@ -407,6 +407,10 @@ class ConvictionScorer:
         Returns:
             List of market summaries sorted by conviction score
         """
+        # Ensure market_data_dict is always a dict (never None)
+        if market_data_dict is None:
+            market_data_dict = {}
+        
         # Build user profiles first (to know average volumes)
         self._build_user_profiles(trades)
         
@@ -511,8 +515,10 @@ class ConvictionScorer:
             # MULTIPLIER 2: Expiration Urgency (++)
             # Near expiration = HIGH weight
             end_date_iso = None
-            if market_data_dict and slug in market_data_dict:
-                end_date_iso = market_data_dict[slug].get('end_date_iso')
+            if market_data_dict:
+                market_info = market_data_dict.get(slug)
+                if market_info and isinstance(market_info, dict):
+                    end_date_iso = market_info.get('end_date_iso')
             expiration_urgency = self._calculate_expiration_urgency(end_date_iso)
             
             # MULTIPLIER 3: Volume vs Average (++)

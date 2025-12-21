@@ -421,3 +421,68 @@ class TestPracticalValidation:
         assert scores['moderate'] > scores['low'] * 1.2
         assert scores['high'] > scores['moderate'] * 1.5
         assert scores['extreme'] > scores['high'] * 1.2
+
+    def test_scorer_handles_none_market_data(self):
+        """
+        Test that scorer gracefully handles None market_data_dict.
+        This was causing AttributeError in Streamlit when market data failed to fetch.
+        """
+        scorer = ConvictionScorer(['0x1', '0x2'])
+
+        base_time = int(datetime.now().timestamp())
+
+        trades = [
+            {'proxyWallet': '0x1', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.7,
+             'size': 5000, 'timestamp': base_time, 'slug': 'market1', 'market': 'm1'},
+            {'proxyWallet': '0x2', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.72,
+             'size': 5000, 'timestamp': base_time, 'slug': 'market1', 'market': 'm1'},
+        ]
+
+        # Should not raise AttributeError or KeyError
+        scored = scorer.score_markets(trades, market_data_dict=None)
+
+        # Should return valid scores
+        assert len(scored) == 1
+        assert scored[0]['conviction_score'] > 0
+        assert 'market1' == scored[0]['slug']
+
+    def test_scorer_handles_partial_market_data(self):
+        """
+        Test that scorer handles case where some markets have data, some don't.
+        """
+        scorer = ConvictionScorer(['0x1', '0x2', '0x3'])
+
+        base_time = int(datetime.now().timestamp())
+        future = datetime.now(timezone.utc) + timedelta(hours=6)
+
+        trades = [
+            # Market 1: Has data
+            {'proxyWallet': '0x1', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.7,
+             'size': 5000, 'timestamp': base_time, 'slug': 'with-data', 'market': 'm1'},
+            {'proxyWallet': '0x2', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.72,
+             'size': 5000, 'timestamp': base_time, 'slug': 'with-data', 'market': 'm1'},
+
+            # Market 2: No data (will be None in dict or missing)
+            {'proxyWallet': '0x1', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.6,
+             'size': 4000, 'timestamp': base_time, 'slug': 'no-data', 'market': 'm2'},
+            {'proxyWallet': '0x3', 'side': 'BUY', 'outcome': 'Yes', 'price': 0.62,
+             'size': 4000, 'timestamp': base_time, 'slug': 'no-data', 'market': 'm2'},
+        ]
+
+        market_data = {
+            'with-data': {'end_date_iso': future.isoformat()},
+            'no-data': None,  # Simulates failed API fetch
+        }
+
+        # Should not crash
+        scored = scorer.score_markets(trades, market_data_dict=market_data)
+
+        # Should return scores for both markets
+        assert len(scored) == 2
+        
+        # Market with data should have higher expiration multiplier
+        with_data = next(m for m in scored if m['slug'] == 'with-data')
+        no_data = next(m for m in scored if m['slug'] == 'no-data')
+        
+        # With data: expiration_mult > 1.0, without: expiration_mult == 1.0
+        assert with_data['expiration_mult'] > no_data['expiration_mult']
