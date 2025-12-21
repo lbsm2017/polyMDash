@@ -347,19 +347,20 @@ def display_conviction_dashboard(trader_source: str = "👤 User List", category
         open_markets.sort(key=lambda x: x['total_trades'], reverse=True)
     # else: Recent Activity is already sorted by weighted_avg_time from ConvictionScorer
     
-    # Table header
-    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3.5, 1, 1, 1.5, 1.5])
-    with header_col1:
-        st.markdown("**Market**")
-    with header_col2:
-        st.markdown("**Conviction**")
-    with header_col3:
-        st.markdown("**Expire**")
-    with header_col4:
-        st.markdown("**📈 YES Position**")
-    with header_col5:
-        st.markdown("**📉 NO Position**")
-    st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
+    # Table header - only show for User List mode
+    if trader_source == "👤 User List":
+        header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([3.5, 1, 1, 1.5, 1.5])
+        with header_col1:
+            st.markdown("**Market**")
+        with header_col2:
+            st.markdown("**Conviction**")
+        with header_col3:
+            st.markdown("**Expire**")
+        with header_col4:
+            st.markdown("**📈 YES Position**")
+        with header_col5:
+            st.markdown("**📉 NO Position**")
+        st.markdown('<div style="border-bottom: 2px solid #3498db; margin: 0.3rem 0 0.5rem 0;"></div>', unsafe_allow_html=True)
     
     # Store tracked_users in session state for use in display functions
     if 'user_lookup' not in st.session_state or st.session_state.get('trader_source') != trader_source:
