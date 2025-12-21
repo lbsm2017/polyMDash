@@ -98,14 +98,14 @@ def main():
     st.sidebar.markdown("**Strategy**")
     strategy = st.sidebar.radio(
         "Select Strategy:",
-        ["Conviction Tracker", "Pullback Hunter"],
+        ["Conviction Tracker", "Momentum Hunter"],
         index=0,
         help="Choose trading strategy"
     )
     st.sidebar.markdown("---")
     
     # Route to appropriate strategy
-    if strategy == "Pullback Hunter":
+    if strategy == "Momentum Hunter":
         render_pullback_hunter()
         return
     
@@ -887,36 +887,54 @@ def format_time_ago(timestamp: int) -> str:
 def render_pullback_hunter():
     """Render the Pullback Hunter dashboard page."""
     
-    st.title("🎯 Pullback Hunter")
-    st.markdown("**Strategy**: Surf the last mile - markets with strong momentum toward 100% or 0% expiring soon")
-    st.markdown("---")
+    # Compact header
+    st.markdown("## 🎯 Momentum Hunter")
+    st.caption("Markets with strong momentum toward 100% or 0%, combining extremity and price movement")
     
-    # Simple controls
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        max_expiry_hours = st.number_input("Max Hours to Expiry", min_value=1, max_value=720, value=72)
-    
-    with col2:
+    # Move all controls to sidebar
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### ⚙️ Momentum Hunter Settings")
+        
+        max_expiry_days = st.number_input(
+            "Max Days to Expiry", 
+            min_value=1, 
+            max_value=30, 
+            value=14,
+            help="Base window - extends 5x for high momentum (≥30%) markets"
+        )
+        
         min_extremity = st.slider(
-            "Min Extremity (Distance from 50%)", 
+            "Min Extremity", 
             min_value=0.15, 
             max_value=0.45, 
             value=0.25, 
             step=0.05,
-            help="Only show markets this far from 50% (0.25 = markets >75% or <25%)"
+            help="Distance from 50%: Markets >75%/<25% or >60%/<40% with ≥30% momentum"
         )
+        
+        limit = st.number_input(
+            "Max Markets to Scan", 
+            min_value=10, 
+            max_value=5000, 
+            value=1000,
+            help="Higher values = more comprehensive scan but slower"
+        )
+        
+        debug_mode = st.checkbox(
+            "🐛 Debug Mode", 
+            value=False, 
+            help="Show all markets without extremity/expiry filters"
+        )
+        
+        st.caption("💡 Qualifies if extreme (>75%/<25%) OR high momentum (≥30%) with >60%/<40% probability")
     
-    with col3:
-        limit = st.number_input("Max Markets to Scan", min_value=10, max_value=1000, value=500)
-    
-    st.markdown("---")
-    
-    # Scan button
-    if st.button("Scan Markets", type="primary", use_container_width=True):
+    # Scan button - prominent
+    if st.button("🔍 Scan Markets", type="primary", use_container_width=True):
         with st.spinner("Scanning markets..."):
             try:
-                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit)
+                max_expiry_hours = max_expiry_days * 24
+                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode)
                 st.session_state['opportunities'] = opportunities
                 st.session_state['scan_time'] = datetime.now()
             except Exception as e:
@@ -931,90 +949,213 @@ def render_pullback_hunter():
         opportunities = st.session_state['opportunities']
         scan_time = st.session_state.get('scan_time', datetime.now())
         
-        st.success(f"Found {len(opportunities)} opportunities (scanned at {scan_time.strftime('%H:%M:%S')})")
+        st.success(f"Found {len(opportunities)} opportunities (scanned at {scan_time.strftime('%H:%M:%S')})", icon="✅")
         
         if opportunities:
             display_pullback_table(opportunities)
         else:
             st.warning("No opportunities found. Try adjusting filters.")
     else:
-        st.info("Click 'Scan Markets' to start")
+        st.info("👆 Click 'Scan Markets' to start")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int) -> List[Dict]:
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False) -> List[Dict]:
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
         async with GammaClient() as client:
-            markets = await client.get_markets(limit=limit, active=True, closed=False, order_by="volume24hr")
+            # Try multiple sorting strategies to get diverse markets
+            # Volume sorting returns only crypto, so we'll use multiple approaches
+            
+            all_markets = []
+            excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
+                            'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
+            
+            def is_excluded(market):
+                slug = (market.get('slug', '') or '').lower()
+                question = (market.get('question', '') or '').lower()
+                return any(ex in slug or ex in question for ex in excluded_terms)
+            
+            # Strategy 1: Fetch by liquidity (different from volume)
+            logger.info("Fetching markets sorted by liquidity...")
+            try:
+                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="liquidity")
+                non_crypto = [m for m in markets if not is_excluded(m)]
+                logger.info(f"Liquidity sort: {len(markets)} total, {len(non_crypto)} non-crypto")
+                all_markets.extend(non_crypto)
+            except Exception as e:
+                logger.warning(f"Liquidity sort failed: {e}")
+            
+            # Strategy 2: Fetch without sorting (API default)
+            logger.info("Fetching markets with default sorting...")
+            try:
+                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="")
+                non_crypto = [m for m in markets if not is_excluded(m)]
+                logger.info(f"Default sort: {len(markets)} total, {len(non_crypto)} non-crypto")
+                all_markets.extend(non_crypto)
+            except Exception as e:
+                logger.warning(f"Default sort failed: {e}")
+            
+            # Strategy 3: Use offset to get different market sets
+            if len(all_markets) < 100:
+                logger.info("Few non-crypto markets found, trying offset pagination...")
+                for offset in [500, 1000, 1500]:
+                    try:
+                        markets = await client.get_markets(
+                            limit=min(500, limit),
+                            offset=offset,
+                            active=True,
+                            closed=False,
+                            order_by="volume24hr"
+                        )
+                        non_crypto = [m for m in markets if not is_excluded(m)]
+                        logger.info(f"Offset {offset}: {len(markets)} total, {len(non_crypto)} non-crypto")
+                        all_markets.extend(non_crypto)
+                        if len(all_markets) >= 200:
+                            break
+                    except Exception as e:
+                        logger.warning(f"Offset {offset} failed: {e}")
+            
+            # Deduplicate by slug
+            seen = set()
+            markets = []
+            for m in all_markets:
+                slug = m.get('slug', '')
+                if slug and slug not in seen:
+                    seen.add(slug)
+                    markets.append(m)
+            
+            logger.info(f"Combined {len(markets)} unique non-crypto markets from all strategies")
+            
             if not markets:
+                logger.error("No non-crypto markets found with any strategy!")
                 return []
             
-            logger.info(f"Fetched {len(markets)} markets")
+            # Log sample
+            if len(markets) >= 5:
+                sample_questions = [m.get('question', 'N/A')[:50] for m in markets[:5]]
+                logger.info(f"Sample markets: {sample_questions}")
             
-            # Debug: Check first few markets for data structure
-            if markets and len(markets) > 0:
-                sample = markets[0]
-                logger.info(f"Sample market keys: {list(sample.keys())[:20]}")
-                logger.info(f"Sample has endDate: {'endDate' in sample}")
-                logger.info(f"Sample has end_date_iso: {'end_date_iso' in sample}")
-                logger.info(f"Sample has outcomePrices: {'outcomePrices' in sample}")
-                logger.info(f"Sample outcomes structure: {sample.get('outcomes', [])}")
-                
-            filtered = [m for m in markets if not any(ex in (m.get('slug', '') or '').lower() for ex in {'nba', 'nfl', 'nhl', 'mlb', 'ufc', 'boxing'})]
-            logger.info(f"After filtering sports: {len(filtered)} markets")
+            filtered = markets  # Already filtered for crypto
+            
+            if debug_mode:
+                logger.info(f"Debug mode: Processing {len(filtered)} non-crypto markets")
             
             opportunities = []
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
             
-            extreme_count = 0
-            expiry_count = 0
+            # Filter thresholds
+            max_hours_short = max_expiry_hours  # User-specified short window
+            max_hours_momentum = max_expiry_hours * 5  # Extended window for high momentum
+            min_momentum = 0.15  # 15% price change to qualify as momentum
+            high_momentum = 0.30  # 30%+ is high momentum (extends time window)
+            
+            processed = 0
+            skipped = 0
             
             for market in filtered:
-                # Get prices from outcomes array
+                # Get price from lastTradePrice field
                 outcomes = market.get('outcomes', [])
                 if not outcomes or len(outcomes) < 2:
+                    skipped += 1
                     continue
                 
-                # Extract YES price from first outcome
+                # Extract price from lastTradePrice (or bestBid/bestAsk as fallback)
                 try:
-                    yes_price = float(outcomes[0].get('price', 0.5))
+                    yes_price = market.get('lastTradePrice')
+                    
+                    # If no lastTradePrice or it's 0, try bestBid/bestAsk average
+                    if yes_price is None or yes_price == 0:
+                        best_bid = market.get('bestBid')
+                        best_ask = market.get('bestAsk')
+                        if best_bid is not None and best_ask is not None:
+                            yes_price = (float(best_bid) + float(best_ask)) / 2
+                        else:
+                            skipped += 1
+                            continue
+                    
+                    yes_price = float(yes_price)
+                    processed += 1
                 except (ValueError, TypeError, AttributeError):
-                    yes_price = 0.5
+                    skipped += 1
+                    continue
                 
+                # Debug mode: skip all filters
+                if debug_mode:
+                    # Get basic data for display
+                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+                    try:
+                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
+                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    except:
+                        end_dt = now
+                        hours_to_expiry = 0
+                    
+                    volume = float(market.get('volume') or 0)
+                    one_day_change = abs(float(market.get('oneDayPriceChange') or 0))
+                    one_week_change = abs(float(market.get('oneWeekPriceChange') or 0))
+                    momentum = max(one_day_change, one_week_change)
+                    
+                    opportunities.append({
+                        'question': market.get('question', 'Unknown'),
+                        'slug': market.get('slug', ''),
+                        'url': f"https://polymarket.com/market/{market.get('slug', '')}",
+                        'current_prob': yes_price,
+                        'hours_to_expiry': hours_to_expiry,
+                        'end_date': end_dt,
+                        'volume_24h': volume,
+                        'momentum': momentum,
+                        'score': 0,  # No scoring in debug mode
+                        'direction': 'YES' if yes_price >= 0.5 else 'NO'
+                    })
+                    continue
+                
+                # Check if extreme
                 is_extreme_yes = yes_price >= (0.5 + min_extremity)
                 is_extreme_no = yes_price <= (0.5 - min_extremity)
                 
-                if not (is_extreme_yes or is_extreme_no):
-                    continue
+                # Get momentum data (price changes)
+                one_day_change = abs(float(market.get('oneDayPriceChange') or 0))
+                one_week_change = abs(float(market.get('oneWeekPriceChange') or 0))
+                momentum = max(one_day_change, one_week_change)  # Best of 24h or 1w
+                has_high_momentum = momentum >= high_momentum
                 
-                extreme_count += 1
-                
-                # Try different possible field names for end date
-                end_date = market.get('end_date_iso') or market.get('endDate') or market.get('end_date')
+                # Get expiration
+                end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
                 if not end_date:
-                    logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - no end date field")
                     continue
                 
                 try:
                     end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
                     hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                    if hours_to_expiry <= 0 or hours_to_expiry > max_expiry_hours:
-                        logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - hours={hours_to_expiry:.1f}, max={max_expiry_hours}")
-                        continue
-                except Exception as e:
-                    logger.debug(f"Skipping {market.get('question', 'Unknown')[:50]} - date parse error: {e}")
+                except:
                     continue
                 
-                expiry_count += 1
+                # Qualify if: extreme OR (high momentum AND somewhat extreme >60%/<40%)
+                is_somewhat_extreme = yes_price >= 0.60 or yes_price <= 0.40
+                qualifies = (is_extreme_yes or is_extreme_no) or (has_high_momentum and is_somewhat_extreme)
                 
-                # Get volume 
-                volume_24h = float(market.get('volume') or 0)
+                if not qualifies:
+                    continue
+                
+                # High momentum markets get extended window, others use user setting
+                effective_max_hours = max_hours_momentum if has_high_momentum else max_hours_short
+                
+                if hours_to_expiry <= 0 or hours_to_expiry > effective_max_hours:
+                    continue
+                
+                # Get volume
+                volume = float(market.get('volume') or 0)
+                
+                # Calculate score (momentum-weighted)
                 distance_from_50 = abs(yes_price - 0.5)
-                urgency_score = (max_expiry_hours - hours_to_expiry) / max_expiry_hours
-                volume_score = min(volume_24h / 10000, 1.0)
-                score = (distance_from_50 * 40) + (urgency_score * 35) + (volume_score * 25)
+                urgency_score = max(0, (max_hours_short - hours_to_expiry) / max_hours_short)  # Caps at 1.0
+                volume_score = min(volume / 100000, 1.0)
+                momentum_score = min(momentum / 0.5, 1.0)  # Caps at 50% change
+                
+                # Weight: 30% extremity, 25% urgency, 20% volume, 25% momentum
+                score = (distance_from_50 * 30) + (urgency_score * 25) + (volume_score * 20) + (momentum_score * 25)
                 
                 opportunities.append({
                     'question': market.get('question', 'Unknown'),
@@ -1023,60 +1164,143 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     'current_prob': yes_price,
                     'hours_to_expiry': hours_to_expiry,
                     'end_date': end_dt,
-                    'volume_24h': volume_24h,
+                    'volume_24h': volume,
+                    'momentum': momentum,
                     'score': score,
                     'direction': 'YES' if is_extreme_yes else 'NO'
                 })
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
-            logger.info(f"Filtering summary: {len(filtered)} total → {extreme_count} extreme → {expiry_count} within expiry → {len(opportunities)} final")
+            logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
+            
+            # Log first 3 opportunities for debugging
+            if opportunities:
+                logger.info("Sample opportunities:")
+                for i, opp in enumerate(opportunities[:3], 1):
+                    logger.info(f"  {i}. {opp['question'][:50]} - {opp['current_prob']:.0%} - {opp['momentum']:+.0%}")
+            
             return opportunities
     
     return asyncio.run(fetch())
 
 
 def display_pullback_table(opportunities: List[Dict]):
-    """Display opportunities in a table."""
+    """Display opportunities in a compact table."""
     
     st.markdown("### Momentum Opportunities")
-    cols = st.columns([3, 1.2, 1.2, 1.5, 1.5, 1])
-    cols[0].markdown("**Market**")
-    cols[1].markdown("**Current**")
-    cols[2].markdown("**Direction**")
-    cols[3].markdown("**Volume 24h**")
-    cols[4].markdown("**Expires**")
-    cols[5].markdown("**Score**")
-    st.markdown("---")
+    
+    # Sort by expiration - soonest first
+    opportunities = sorted(opportunities, key=lambda x: x['hours_to_expiry'])
+    
+    # Build HTML table directly for better control
+    html = """
+    <style>
+        .momentum-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; font-family: Helvetica, Arial, sans-serif; }
+        .momentum-table th { background: #2c3e50; color: white; padding: 4px 6px; text-align: left; font-size: 0.8rem; font-weight: 600; }
+        .momentum-table td { padding: 3px 6px; border-bottom: 1px solid #ecf0f1; }
+        .momentum-table tr:nth-child(even) { background: #f8f9fa; }
+        .momentum-table tr:nth-child(odd) { background: white; }
+        .momentum-table tr:hover { background: #e8f4f8; }
+        .market-link { color: #2980b9; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
+        .market-link:hover { text-decoration: underline; }
+        .prob-yes { color: #27ae60; font-weight: 600; }
+        .prob-no { color: #e74c3c; font-weight: 600; }
+        .mom-high { color: #9b59b6; font-weight: 600; }
+        .mom-med { color: #9b59b6; }
+        .mom-low { color: #95a5a6; }
+        .exp-urgent { color: #e74c3c; font-weight: 600; }
+        .exp-soon { color: #f39c12; font-weight: 600; }
+        .exp-normal { color: #3498db; }
+        .score-a { color: #27ae60; font-weight: 600; }
+        .score-b { color: #f39c12; font-weight: 600; }
+        .score-c { color: #3498db; }
+    </style>
+    <table class="momentum-table">
+        <thead>
+            <tr>
+                <th style="width: 40%;">Market</th>
+                <th style="width: 8%;">Prob</th>
+                <th style="width: 8%;">Dir</th>
+                <th style="width: 10%;">Mom</th>
+                <th style="width: 10%;">Vol</th>
+                <th style="width: 14%;">Expires</th>
+                <th style="width: 10%;">Score</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
     
     for opp in opportunities[:50]:
-        cols = st.columns([3, 1.2, 1.2, 1.5, 1.5, 1])
-        question = opp['question'][:60] + "..." if len(opp['question']) > 60 else opp['question']
-        cols[0].markdown(f"[{question}]({opp['url']})")
+        question = opp['question'][:65] + "..." if len(opp['question']) > 65 else opp['question']
+        url = opp['url']
         
+        # Probability
         prob = opp['current_prob']
-        prob_color = "#27ae60" if prob > 0.5 else "#e74c3c"
-        cols[1].markdown(f"<span style='color: {prob_color}; font-weight: bold;'>{prob:.1%}</span>", unsafe_allow_html=True)
+        prob_class = "prob-yes" if prob > 0.5 else "prob-no"
+        prob_str = f"{prob:.0%}"
         
-        direction = opp['direction']
-        direction_emoji = "📈" if direction == "YES" else "📉"
-        direction_color = "#27ae60" if direction == "YES" else "#e74c3c"
-        cols[2].markdown(f"<span style='color: {direction_color}; font-weight: bold;'>{direction_emoji} {direction}</span>", unsafe_allow_html=True)
+        # Direction (text only, no emoji)
+        direction = "YES" if opp['direction'] == "YES" else "NO"
+        dir_class = "prob-yes" if direction == "YES" else "prob-no"
         
-        cols[3].markdown(f"${opp['volume_24h']:,.0f}")
-        
-        hours = opp['hours_to_expiry']
-        exp_date = opp['end_date'].strftime('%m/%d %H:%M')
-        if hours < 24:
-            time_str, time_color = f"{int(hours)}h", "#e74c3c"
-        elif hours < 72:
-            time_str, time_color = f"{hours/24:.1f}d", "#f39c12"
+        # Momentum (no emoji)
+        momentum = opp.get('momentum', 0)
+        if momentum >= 0.30:
+            mom_class = "mom-high"
+        elif momentum >= 0.15:
+            mom_class = "mom-med"
         else:
-            time_str, time_color = f"{int(hours/24)}d", "#7f8c8d"
+            mom_class = "mom-low"
+        mom_str = f"{momentum:+.0%}"
         
-        cols[4].markdown(f"<span style='color: {time_color}; font-weight: 600;'>{time_str}</span>", unsafe_allow_html=True)
-        cols[4].caption(exp_date)
-        cols[5].markdown(f"**{opp['score']:.0f}**")
-        st.markdown("---")
+        # Volume
+        vol = opp['volume_24h']
+        vol_str = f"${vol/1000:.0f}K" if vol >= 1000 else f"${vol:.0f}"
+        
+        # Expiration
+        hours = opp['hours_to_expiry']
+        if hours < 24:
+            time_str = f"{int(hours)}h"
+            exp_class = "exp-urgent"
+        elif hours < 72:
+            time_str = f"{hours/24:.1f}d"
+            exp_class = "exp-soon"
+        else:
+            time_str = f"{int(hours/24)}d"
+            exp_class = "exp-normal"
+        exp_date = opp['end_date'].strftime('%m/%d')
+        exp_str = f"{time_str} {exp_date}"
+        
+        # Score
+        score = opp['score']
+        if score >= 70:
+            grade, score_class = "A", "score-a"
+        elif score >= 60:
+            grade, score_class = "B", "score-b"
+        else:
+            grade, score_class = "C", "score-c"
+        score_str = f"{score:.0f} {grade}"
+        
+        html += f"""
+            <tr>
+                <td><a href="{url}" class="market-link" target="_blank">{question}</a></td>
+                <td><span class="{prob_class}">{prob_str}</span></td>
+                <td><span class="{dir_class}">{direction}</span></td>
+                <td><span class="{mom_class}">{mom_str}</span></td>
+                <td>{vol_str}</td>
+                <td><span class="{exp_class}">{exp_str}</span></td>
+                <td><span class="{score_class}">{score_str}</span></td>
+            </tr>
+        """
+    
+    html += """
+        </tbody>
+    </table>
+    """
+    
+    # Use st.write with HTML to ensure proper rendering
+    import streamlit.components.v1 as components
+    components.html(html, height=min(len(opportunities) * 35 + 100, 1200), scrolling=True)
 
 
 if __name__ == "__main__":
