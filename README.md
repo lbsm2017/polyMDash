@@ -1,6 +1,6 @@
 # Polymarket Dashboard
 
-Real-time trader scanner for Polymarket markets. Tracks specific traders and surfaces high-conviction signals using Black-Scholes inspired scoring.
+Real-time trader scanner for Polymarket markets. Tracks specific traders and surfaces high-conviction signals.
 
 ## Installation
 
@@ -11,7 +11,7 @@ streamlit run app.py
 
 ## Features
 
-- **Smart Conviction Scoring**: Black-Scholes inspired algorithm with time decay, volatility dampening, and Kelly criterion
+- **Smart Conviction Scoring**: Algorithm with time decay, volatility dampening, and Kelly criterion
 - **High-Performance API Pool**: Parallel data fetching with connection reuse (5-10x speedup)
 - **Real-Time Position Tracking**: Monitor tracked traders' positions with recency indicators
 - **Flexible Sorting**: Sort by recent activity, conviction, volume, or number of trades
