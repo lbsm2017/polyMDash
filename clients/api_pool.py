@@ -224,23 +224,7 @@ def fetch_all_data(
     cutoff = int((datetime.now() - timedelta(minutes=cutoff_minutes)).timestamp())
     pool = APIPool.get_instance()
     
-    async def _fetch_with_cleanup():
-        try:
-            return await pool.fetch_all_parallel(wallets, market_slugs, cutoff)
-        finally:
-            # Close session after each fetch to prevent event loop issues
-            await pool.close()
+    async def _fetch():
+        return await pool.fetch_all_parallel(wallets, market_slugs, cutoff)
     
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If loop is running (e.g., in Jupyter), create new one
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, _fetch_with_cleanup())
-                return future.result()
-        else:
-            return loop.run_until_complete(_fetch_with_cleanup())
-    except RuntimeError:
-        # No event loop exists, create one
-        return asyncio.run(_fetch_with_cleanup())
+    return asyncio.run(_fetch())
