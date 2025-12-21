@@ -297,15 +297,15 @@ def display_conviction_dashboard(trader_source: str = "👤 User List", category
         if not trades:
             st.info("No recent activity from tracked users in the last 24 hours.")
             return
-        
-        # Score markets
-        scorer = ConvictionScorer(wallet_addresses)
-        scored_markets = scorer.score_markets(trades)
     
-    # Phase 2: Fetch all market data in parallel
+    # Phase 2: Fetch all market data in parallel (need this for expiration urgency)
     with st.spinner("Fetching current prices..."):
-        market_slugs = [m['slug'] for m in scored_markets]
+        market_slugs = list(set([t.get('slug', '') for t in trades if t.get('slug')]))
         _, batch_market_data = fetch_all_data([], market_slugs, cutoff_minutes=1440)
+        
+        # Score markets WITH market data for expiration urgency
+        scorer = ConvictionScorer(wallet_addresses)
+        scored_markets = scorer.score_markets(trades, market_data_dict=batch_market_data)
     
     # Filter out closed markets and markets without tracked user positions
     open_markets = [
