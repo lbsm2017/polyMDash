@@ -1356,6 +1356,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 parent_question = market.get('question', 'Unknown')
                 market_slug = market.get('slug', '')
                 
+                # Construct URL - Polymarket uses /market/ path with slug
+                # This works for both binary and multi-outcome markets
+                market_url = f"https://polymarket.com/market/{market_slug}"
+                
                 # Process EACH outcome as a separate opportunity
                 for outcome_idx, outcome_name in enumerate(outcomes):
                     # Extract price for this specific outcome
@@ -1500,7 +1504,7 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         opportunities.append({
                             'question': display_question,
                             'slug': market_slug,
-                            'url': f"https://polymarket.com/event/{market_slug}",
+                            'url': market_url,
                             'current_prob': yes_price,
                             'hours_to_expiry': hours_to_expiry,
                             'end_date': end_dt,
@@ -1623,7 +1627,7 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     opportunities.append({
                         'question': display_question,
                         'slug': market_slug,
-                        'url': f"https://polymarket.com/event/{market_slug}",
+                        'url': market_url,
                         'current_prob': yes_price,
                         'hours_to_expiry': hours_to_expiry,
                         'end_date': end_dt,
