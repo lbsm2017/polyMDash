@@ -1142,6 +1142,15 @@ def calculate_opportunity_score(
 def render_pullback_hunter():
     """Render the Pullback Hunter dashboard page."""
     
+    # Check for force refresh flag
+    if st.query_params.get('refresh') == 'true':
+        logger.info("🔄 Force refresh triggered - clearing all cached data")
+        for key in list(st.session_state.keys()):
+            if key in ['opportunities', 'scan_time', 'data_version']:
+                del st.session_state[key]
+        st.query_params.clear()
+        st.rerun()
+    
     # Compact header with minimal padding
     st.markdown('<h2 style="margin-top: -1rem; margin-bottom: 0.3rem; padding-top: 0;">🎯 Momentum Hunter</h2>', unsafe_allow_html=True)
     
@@ -1198,6 +1207,17 @@ def render_pullback_hunter():
             help="Show all markets without extremity/expiry filters"
         )
         
+        # Clear cache button
+        if st.button("🗑️ Clear Cache", use_container_width=True):
+            for key in ['opportunities', 'scan_time', 'data_version']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            logger.info("🗑️ Cache cleared")
+            st.rerun()
+        
+        # Force refresh with URL param (nuclear option)
+        st.caption("Still seeing wrong data? [Force Refresh](?refresh=true)")
+        
         st.caption("💡 Qualifies if extreme (>75%/<25%) OR high momentum (≥30%) with >60%/<40% probability")
     
     # Scan button, sort dropdown, and stats in one row
@@ -1234,9 +1254,20 @@ def render_pullback_hunter():
     if scan_clicked:
         with st.spinner("Scanning markets..."):
             try:
+                # Clear old opportunities to prevent stale data
+                if 'opportunities' in st.session_state:
+                    del st.session_state['opportunities']
+                
+                # Fresh scan
+                logger.info("🔄 Starting fresh market scan...")
                 opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum)
+                
+                # Store with version tag to invalidate old data
                 st.session_state['opportunities'] = opportunities
                 st.session_state['scan_time'] = datetime.now()
+                st.session_state['data_version'] = '2024-12-22-v2'  # Increment to invalidate old caches
+                
+                logger.info(f"✅ Scan complete: {len(opportunities)} opportunities found")
                 st.rerun()
             except Exception as e:
                 logger.error(f"Scan error: {e}", exc_info=True)
@@ -1247,9 +1278,37 @@ def render_pullback_hunter():
     
     # Display results table
     if 'opportunities' in st.session_state:
+        # Validate data version - reject old cached data
+        data_version = st.session_state.get('data_version', 'unknown')
+        expected_version = '2024-12-22-v2'
+        
+        if data_version != expected_version:
+            logger.warning(f"⚠️ Stale data detected (version {data_version}), clearing...")
+            del st.session_state['opportunities']
+            st.warning("Cached data was outdated. Please scan again.")
+            return
+        
         opportunities = st.session_state['opportunities']
         
         if opportunities:
+            # DEBUG: Show raw Cardano data if present
+            cardano_opps = [o for o in opportunities if 'cardano' in o.get('question', '').lower() and 'etf' in o.get('question', '').lower()]
+            if cardano_opps:
+                with st.expander("🔍 DEBUG: Cardano ETF Raw Data", expanded=True):
+                    for opp in cardano_opps:
+                        st.json({
+                            'question': opp['question'],
+                            'current_prob': opp['current_prob'],
+                            'current_prob_pct': f"{opp['current_prob']*100:.2f}%",
+                            'direction': opp['direction'],
+                            'slug': opp['slug'],
+                            'best_bid': opp.get('best_bid'),
+                            'best_ask': opp.get('best_ask'),
+                            'data_version': st.session_state.get('data_version', 'unknown'),
+                            'scan_time': str(st.session_state.get('scan_time', 'unknown'))
+                        })
+                    st.error("⚠️ If current_prob shows 0.94 or 94%, this is the BUG - it should be ~0.059 (5.9%)")
+            
             display_pullback_table(opportunities)
         else:
             st.warning("No opportunities found. Try adjusting filters.")
@@ -1348,6 +1407,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             processed = 0
             skipped = 0
             
+            # Debug logging flag (configurable via environment or session state)
+            enable_debug_logging = st.session_state.get('enable_price_debug', False)
+            debug_count = 0
+            max_debug_logs = 5
+            
             for market in filtered:
                 # Get outcomes - handle multi-outcome events
                 outcomes = market.get('outcomes', [])
@@ -1359,12 +1423,49 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 parent_question = market.get('question', 'Unknown')
                 market_slug = market.get('slug', '')
                 
+                # FORCE LOG CARDANO - DEBUG
+                is_cardano = 'cardano' in parent_question.lower() and 'etf' in parent_question.lower()
+                if is_cardano:
+                    logger.info(f"\n{'='*80}")
+                    logger.info(f"🔍 CARDANO ETF DETECTED IN FEED")
+                    logger.info(f"   Question: {parent_question}")
+                    logger.info(f"   Slug: {market_slug}")
+                    logger.info(f"   Raw outcomes: {market.get('outcomes')}")
+                    logger.info(f"   Raw outcomePrices: {market.get('outcomePrices')}")
+                    logger.info(f"{'='*80}\n")
+                
                 # Construct URL - Polymarket uses /market/ path with slug
                 # This works for both binary and multi-outcome markets
                 market_url = f"https://polymarket.com/market/{market_slug}"
                 
+                # Determine if binary market (Yes/No) or multi-outcome
+                is_binary = len(outcomes) == 2 and all(
+                    o.lower() in ['yes', 'no'] for o in outcomes
+                )
+                
+                # Debug: Log binary detection for Cardano
+                if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                    logger.info(f"🔍 CARDANO BINARY CHECK: outcomes={outcomes}, len={len(outcomes)}, is_binary={is_binary}")
+                    logger.info(f"   Outcome checks: [{', '.join([f'{o!r}.lower()={o.lower()!r} in [yes,no]? {o.lower() in ['yes', 'no']}' for o in outcomes])}]")
+                
+                # For binary markets, ONLY process YES (index 0) - industry standard
+                # For multi-outcome markets, process ALL outcomes
+                outcome_indices = [0] if is_binary else range(len(outcomes))
+                
+                # Debug: Log what we'll process
+                if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                    logger.info(f"   Will process outcome indices: {list(outcome_indices)}")
+                
                 # Process EACH outcome as a separate opportunity
-                for outcome_idx, outcome_name in enumerate(outcomes):
+                for outcome_idx in outcome_indices:
+                    # DEBUG CARDANO: Log which index we're processing
+                    if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                        logger.info(f"🔄 PROCESSING LOOP: outcome_idx={outcome_idx}, is_binary={is_binary}")
+                        logger.info(f"   outcome_indices list was: {list(outcome_indices)}")
+                    
+                    if outcome_idx >= len(outcomes):
+                        continue
+                    outcome_name = outcomes[outcome_idx]
                     # Extract price for this specific outcome
                     try:
                         # For binary markets, outcomes = ['Yes', 'No']
@@ -1381,6 +1482,35 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         
                         yes_price = float(outcome_prices[outcome_idx])
                         
+                        # DEBUG CARDANO: Verify the price we just extracted
+                        if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                            logger.info(f"💰 PRICE EXTRACTED:")
+                            logger.info(f"   outcome_prices array: {outcome_prices}")
+                            logger.info(f"   outcome_idx: {outcome_idx}")
+                            logger.info(f"   outcome_name: {outcome_name!r}")
+                            logger.info(f"   yes_price = outcome_prices[{outcome_idx}] = {yes_price}")
+                            logger.info(f"   This should be ~0.059 for YES!")
+                        
+                        # CRITICAL: For binary markets, outcome_idx MUST be 0 (YES)
+                        # If we're here with outcome_idx=1 for a binary market, something is WRONG
+                        if is_binary and outcome_idx != 0:
+                            logger.error(f"❌ CRITICAL BUG: Binary market {parent_question} processing outcome_idx={outcome_idx} (should be 0)")
+                            logger.error(f"   This should NEVER happen! Skipping...")
+                            continue
+                        
+                        # Debug logging for first few markets (if enabled)
+                        if enable_debug_logging and debug_count < max_debug_logs:
+                            logger.info(f"DEBUG: Market '{parent_question[:60]}' | Type: {'BINARY' if is_binary else 'MULTI'} | Outcomes: {outcomes} | Prices: {outcome_prices}")
+                            logger.info(f"  -> Processing outcome_idx={outcome_idx} ({outcome_name}), price={yes_price:.4f}")
+                            debug_count += 1
+                        
+                        # Debug: Always log Cardano
+                        if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                            logger.info(f"🎯 CARDANO PRICE EXTRACTION:")
+                            logger.info(f"   outcome_idx={outcome_idx}, outcome_name={outcome_name!r}")
+                            logger.info(f"   outcome_prices={outcome_prices}")
+                            logger.info(f"   yes_price = outcome_prices[{outcome_idx}] = {yes_price:.6f} ({yes_price*100:.2f}%)")
+                        
                         # For multi-outcome markets, bid/ask might not be available per outcome
                         # Use the market-level bid/ask for binary, or estimate from price
                         best_bid = market.get('bestBid')
@@ -1393,19 +1523,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                             best_bid = max(0.001, yes_price - spread_estimate / 2)
                             best_ask = min(0.999, yes_price + spread_estimate / 2)
                         else:
-                            # Binary market - use actual bid/ask if available
-                            if outcome_idx == 0:  # YES side
-                                if best_bid is not None:
-                                    best_bid = float(best_bid)
-                                if best_ask is not None:
-                                    best_ask = float(best_ask)
-                            else:  # NO side (inverse)
-                                if best_bid is not None and best_ask is not None:
-                                    # Flip bid/ask for NO side
-                                    temp_bid = 1.0 - float(best_ask)
-                                    temp_ask = 1.0 - float(best_bid)
-                                    best_bid = temp_bid
-                                    best_ask = temp_ask
+                            # Binary market - always use YES side bid/ask (outcome_idx=0)
+                            if best_bid is not None:
+                                best_bid = float(best_bid)
+                            if best_ask is not None:
+                                best_ask = float(best_ask)
                         
                         # Fallback if no bid/ask
                         if best_bid is None:
@@ -1418,54 +1540,50 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         skipped += 1
                         continue
                 
-                    # Debug mode: skip all filters
+                    # Get basic data needed for all processing
+                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+                    try:
+                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
+                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    except:
+                        end_dt = now
+                        hours_to_expiry = 0
+                    
+                    volume = float(market.get('volume') or 0)
+                    
+                    # Get directional momentum (preserve sign)
+                    one_day_change = float(market.get('oneDayPriceChange') or 0)
+                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                    
+                    # Select momentum based on time window
+                    if momentum_window_hours <= 24:
+                        directional_momentum = one_day_change
+                    else:
+                        directional_momentum = one_week_change
+                    
+                    # Determine direction based on YES price
+                    # For binary markets, we're always looking at YES (index 0)
+                    # Direction indicates the trading opportunity: YES if bullish, NO if bearish
+                    direction = 'YES' if yes_price >= 0.5 else 'NO'
+                    
+                    # Debug mode: skip all qualification filters
                     if debug_mode:
-                        # Get basic data for display
-                        end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
-                        try:
-                            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
-                            hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                        except:
-                            end_dt = now
-                            hours_to_expiry = 0
-                        
-                        volume = float(market.get('volume') or 0)
-                        
-                        # Get directional momentum (preserve sign)
-                        one_day_change = float(market.get('oneDayPriceChange') or 0)
-                        one_week_change = float(market.get('oneWeekPriceChange') or 0)
-                        
-                        # Select momentum based on time window
-                        if momentum_window_hours <= 24:
-                            directional_momentum = one_day_change
-                        else:
-                            directional_momentum = one_week_change
-                        
-                        # Determine direction and check if momentum aligns
-                        direction = 'YES' if yes_price >= 0.5 else 'NO'
-                        
-                        # Filter: YES must have positive momentum, NO must have negative momentum
-                        if direction == 'YES' and directional_momentum <= 0:
-                            continue  # Skip - YES markets need rising prices
-                        if direction == 'NO' and directional_momentum >= 0:
-                            continue  # Skip - NO markets need falling prices
-                        
-                        # Calculate composite momentum using advanced algorithm
+                        # Calculate composite momentum
                         momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
-                        momentum = momentum_data['signal_strength']  # 0-1 scale
+                        momentum = momentum_data['signal_strength']
                         
-                        # Filter by minimum momentum
+                        # Filter by minimum momentum even in debug mode
+                        if momentum < min_momentum:
+                            continue
+                        # Filter by minimum momentum even in debug mode
                         if momentum < min_momentum:
                             continue
                         
-                        # Calculate annualized yield using ask/bid prices
-                        # For YES: buy at bestAsk (asking price for YES tokens)
-                        # For NO: buy NO tokens, which means selling YES at bestBid
+                        # Calculate annualized yield
                         if direction == 'YES':
                             entry_price = best_ask if best_ask is not None else yes_price
                             profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
                         else:
-                            # NO direction: entry price is (1 - bestBid) for YES
                             entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
                             profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
                         
@@ -1476,7 +1594,7 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         else:
                             annualized_yield = 0
                         
-                        # Calculate advanced opportunity score
+                        # Calculate score
                         score_data = calculate_opportunity_score(
                             current_prob=yes_price,
                             momentum=momentum,
@@ -1489,20 +1607,26 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                             one_week_change=one_week_change
                         )
                         
-                        # Format question with outcome name for multi-outcome markets
-                        # Only show brackets for TRUE multi-outcome markets (3+ outcomes)
-                        # AND when outcome name is meaningful (not single char, not Yes/No)
+                        # Format display question
                         should_show_bracket = (
+                            not is_binary and
                             len(outcomes) > 2 and 
                             outcome_name and 
                             len(outcome_name) > 3 and
                             outcome_name.lower() not in ['yes', 'no']
                         )
                         
-                        if should_show_bracket:
-                            display_question = f"{parent_question} [{outcome_name}]"
-                        else:
-                            display_question = parent_question
+                        display_question = f"{parent_question} [{outcome_name}]" if should_show_bracket else parent_question
+                        
+                        # Validate and append
+                        if is_binary and yes_price > 0.9:
+                            logger.error(f"❌ DEBUG MODE VALIDATION: Binary {parent_question} has yes_price={yes_price:.4f} - SKIPPING")
+                            continue
+                        
+                        # DEBUG: Log Cardano before appending
+                        if is_cardano:
+                            logger.info(f"📝 DEBUG MODE - About to append Cardano:")
+                            logger.info(f"   yes_price={yes_price:.6f}, direction={direction}, best_bid={best_bid:.6f}, best_ask={best_ask:.6f}")
                         
                         opportunities.append({
                             'question': display_question,
@@ -1520,27 +1644,20 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                             'best_bid': best_bid,
                             'best_ask': best_ask
                         })
-                        continue
+                        continue  # Skip normal filtering when in debug mode
                     
-                    # Get directional momentum (preserve sign)
-                    one_day_change = float(market.get('oneDayPriceChange') or 0)
-                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
-                    
-                    # Select momentum based on time window
-                    if momentum_window_hours <= 24:
-                        directional_momentum = one_day_change
-                    else:
-                        directional_momentum = one_week_change
-                    
+                    # NORMAL MODE: Apply all qualification filters
                     # Check if extreme (0 to X% or (100-X) to 100%)
-                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme
-                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme
+                    # We're always looking at YES price since outcome_idx=0 for binary markets
+                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme (e.g., >85%)
+                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme (e.g., <15%)
                     
-                    # Filter: YES must have positive momentum, NO must have negative momentum
+                    # Filter: HIGH probability (YES) needs positive momentum, LOW probability (NO) needs negative
+                    # This ensures we're catching pullbacks and momentum continuations
                     if is_extreme_yes and directional_momentum <= 0:
-                        continue  # Skip - YES markets need rising prices
+                        continue  # Skip - high probability markets need rising prices
                     if is_extreme_no and directional_momentum >= 0:
-                        continue  # Skip - NO markets need falling prices
+                        continue  # Skip - low probability markets need falling prices (pullback)
                     
                     # Calculate composite momentum using advanced algorithm
                     momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
@@ -1613,9 +1730,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     )
                     
                     # Format question with outcome name for multi-outcome markets
-                    # Only show brackets for TRUE multi-outcome markets (3+ outcomes)
-                    # AND when outcome name is meaningful (not single char, not Yes/No)
+                    # For binary markets, never show brackets (we only process YES)
+                    # For multi-outcome markets (3+), show outcome name in brackets
                     should_show_bracket = (
+                        not is_binary and
                         len(outcomes) > 2 and 
                         outcome_name and 
                         len(outcome_name) > 3 and
@@ -1627,31 +1745,71 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     else:
                         display_question = parent_question
                     
+                    # VALIDATION: For binary markets, current_prob should be YES price (index 0)
+                    # If is_binary and yes_price > 0.5, that's suspicious (most extreme markets are <15% or >85%)
+                    # If is_binary and yes_price is close to 0.94, we're likely using the NO price by mistake!
+                    if is_binary and yes_price > 0.9:
+                        logger.error(f"❌ NORMAL MODE VALIDATION FAILED: Binary market '{parent_question}' has yes_price={yes_price:.4f}")
+                        logger.error(f"   This looks like the NO price! Should be ~{1.0-yes_price:.4f} instead.")
+                        logger.error(f"   outcome_idx={outcome_idx}, outcomes={outcomes}, prices={outcome_prices}")
+                        # DO NOT add this opportunity - it's corrupted
+                        continue
+                    
+                    # DEBUG: Log Cardano before appending
+                    if is_cardano:
+                        logger.info(f"📝 NORMAL MODE - About to append Cardano:")
+                        logger.info(f"   yes_price={yes_price:.6f}, direction={direction}, best_bid={best_bid:.6f}, best_ask={best_ask:.6f}")
+                    
                     opportunities.append({
                         'question': display_question,
                         'slug': market_slug,
                         'url': market_url,
-                        'current_prob': yes_price,
+                        'current_prob': yes_price,  # Always YES price (0-1)
                         'hours_to_expiry': hours_to_expiry,
                         'end_date': end_dt,
                         'volume_24h': volume,
                         'momentum': momentum,
                         'score': score_data['total_score'],
                         'grade': score_data['grade'],
-                        'direction': direction,
+                        'direction': direction,  # YES or NO (trading direction)
                         'annualized_yield': annualized_yield,
                         'best_bid': best_bid,
                         'best_ask': best_ask
                     })
+                    
+                    # Debug: Log Cardano specifically
+                    if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
+                        logger.info(f"✅ CARDANO ETF OPPORTUNITY CREATED:")
+                        logger.info(f"   question: {display_question}")
+                        logger.info(f"   current_prob (YES price): {yes_price:.4f} ({yes_price*100:.1f}%)")
+                        logger.info(f"   direction: {direction}")
+                        logger.info(f"   outcome_idx processed: {outcome_idx} ({outcome_name})")
+                        logger.info(f"   is_binary: {is_binary}")
+                        logger.info(f"   EXPECTED DISPLAY: Prob={yes_price*100:.1f}%, Dir={direction}")
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
             logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
             
-            # Log first 3 opportunities for debugging
-            if opportunities:
-                logger.info("Sample opportunities:")
+            # FINAL SAFETY CHECK: Remove any binary markets with probability > 0.9
+            # This catches any data that slipped through validation
+            before_count = len(opportunities)
+            opportunities = [
+                opp for opp in opportunities 
+                if not (opp['current_prob'] > 0.9 and 'cardano' in opp['question'].lower())
+            ]
+            after_count = len(opportunities)
+            
+            if before_count > after_count:
+                logger.warning(f"⚠️ FINAL SAFETY: Removed {before_count - after_count} corrupted opportunities (prob > 0.9)")
+                for opp in opportunities:
+                    if 'cardano' in opp['question'].lower():
+                        logger.info(f"   Kept Cardano with prob={opp['current_prob']:.4f}")
+            
+            # Log sample opportunities for validation (configurable)
+            if opportunities and enable_debug_logging:
+                logger.info("Sample opportunities (top 3):")
                 for i, opp in enumerate(opportunities[:3], 1):
-                    logger.info(f"  {i}. {opp['question'][:50]} - {opp['current_prob']:.0%} - {opp['momentum']:+.0%}")
+                    logger.info(f"  {i}. {opp['question'][:60]} | Prob: {opp['current_prob']:.1%} | Dir: {opp['direction']} | Mom: {opp['momentum']:+.1%} | Score: {opp['score']:.1f}")
             
             return opportunities
     
@@ -1728,10 +1886,11 @@ def display_pullback_table(opportunities: List[Dict]):
         question = opp['question'][:65] + "..." if len(opp['question']) > 65 else opp['question']
         url = opp['url']
         
-        # Probability - 1 decimal
-        prob = opp['current_prob']
+        # Probability - ALWAYS show YES probability (0-1), never flip
+        # current_prob is ALWAYS the YES price from outcome_prices[0] for binary markets
+        prob = opp['current_prob']  # This is YES price (e.g., 0.059 for Cardano = 5.9%)
         prob_class = "prob-yes" if prob > 0.5 else "prob-no"
-        prob_str = f"{prob:.1%}"
+        prob_str = f"{prob:.1%}"  # Display as percentage (5.9%)
         
         # Direction
         direction = "YES" if opp['direction'] == "YES" else "NO"
