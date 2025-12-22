@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 from typing import List, Dict, Optional, Tuple
 import logging
+import math
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ def main():
     strategy = st.sidebar.radio(
         "Select Strategy:",
         ["Conviction Tracker", "Momentum Hunter"],
-        index=0,
+        index=1,
         help="Choose trading strategy"
     )
     st.sidebar.markdown("---")
@@ -240,7 +241,7 @@ def main():
     st.sidebar.markdown("---")
     
     # Auto-refresh
-    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (30s)", value=True)
+    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (30s)", value=False)
     
     if st.sidebar.button("🔄 Refresh Now", use_container_width=True):
         st.cache_data.clear()
@@ -884,6 +885,257 @@ def format_time_ago(timestamp: int) -> str:
 # PULLBACK HUNTER STRATEGY
 # ============================================================================
 
+def calculate_composite_momentum(current_price: float, price_change: float) -> dict:
+    """
+    Calculate composite momentum score combining proportional and absolute moves.
+    
+    Uses log-scaled proportional momentum + absolute momentum with intelligent weighting.
+    
+    Examples:
+    - 5% → 1% = strong proportional move (80% relative decline toward 0%)
+    - 60% → 88% = strong absolute move (+28pp, significant swing)
+    - 95% → 99% = moderate proportional but strong signal near extreme
+    
+    Returns dict with signal_strength on 0-1 scale.
+    """
+    # Calculate old price from current and change
+    old_price = current_price - price_change
+    
+    # Clamp prices to valid range
+    old_price = max(0.001, min(0.999, old_price))
+    current_price_clamped = max(0.001, min(0.999, current_price))
+    
+    # 1. ABSOLUTE MOMENTUM: Simple difference
+    absolute_momentum = abs(price_change)
+    
+    # 2. PROPORTIONAL MOMENTUM using log-odds (handles asymmetry near extremes)
+    def log_odds(p):
+        p = max(0.001, min(0.999, p))
+        return math.log(p / (1 - p))
+    
+    old_log_odds = log_odds(old_price)
+    new_log_odds = log_odds(current_price_clamped)
+    log_odds_change = abs(new_log_odds - old_log_odds)
+    
+    # Normalize log-odds change to 0-1 scale
+    # log-odds change of 1.5 = significant move
+    # log-odds change of 3.0 = major move
+    proportional_momentum = min(log_odds_change / 3.0, 1.0)
+    
+    # 3. DISTANCE-WEIGHTED ABSOLUTE: Moves near extremes matter more
+    distance_to_center = abs(current_price_clamped - 0.5)
+    extremity_multiplier = 1.0 + distance_to_center
+    weighted_absolute = absolute_momentum * extremity_multiplier
+    
+    # 4. VELOCITY: Reward acceleration toward extremes
+    moving_toward_extreme = (
+        (current_price_clamped > 0.5 and price_change > 0) or
+        (current_price_clamped < 0.5 and price_change < 0)
+    )
+    velocity_bonus = 1.2 if moving_toward_extreme else 0.8
+    
+    # 5. COMPOSITE SCORE
+    raw_composite = (
+        proportional_momentum * 0.35 +
+        min(weighted_absolute * 2.0, 1.0) * 0.35 +
+        min(absolute_momentum * 2.5, 1.0) * 0.30
+    )
+    composite = raw_composite * velocity_bonus
+    signal_strength = min(composite, 1.0)
+    
+    return {
+        'proportional': proportional_momentum,
+        'absolute': absolute_momentum,
+        'log_odds_change': log_odds_change,
+        'weighted_absolute': weighted_absolute,
+        'composite': composite,
+        'signal_strength': signal_strength,
+        'moving_toward_extreme': moving_toward_extreme
+    }
+
+
+def calculate_opportunity_score(
+    current_prob: float,
+    momentum: float,
+    hours_to_expiry: float,
+    volume: float,
+    best_bid: float,
+    best_ask: float,
+    direction: str,
+    one_day_change: float = 0,
+    one_week_change: float = 0
+) -> dict:
+    """
+    Calculate sophisticated opportunity score for "last mile" trades.
+    
+    Combines multiple signals with dynamic weighting:
+    - Proximity to target (0% or 100%)
+    - Momentum strength and consistency
+    - Time urgency (theta decay)
+    - Spread quality
+    - Volume conviction
+    - Risk/reward ratio
+    
+    Returns dict with total_score (0-100), grade, and components.
+    """
+    
+    # 1. PROXIMITY SCORE (0-100) - Exponential curve
+    if direction == 'YES':
+        distance_to_target = 1.0 - current_prob
+    else:
+        distance_to_target = current_prob
+    
+    proximity_raw = 1.0 - distance_to_target
+    proximity_score = (proximity_raw ** 1.5) * 100
+    if distance_to_target <= 0.10:
+        proximity_score = min(100, proximity_score * 1.15)
+    
+    # 2. MOMENTUM SCORE (0-100) with consistency bonus
+    momentum_score = momentum * 100
+    short_term_aligned = (direction == 'YES' and one_day_change > 0) or (direction == 'NO' and one_day_change < 0)
+    long_term_aligned = (direction == 'YES' and one_week_change > 0) or (direction == 'NO' and one_week_change < 0)
+    
+    if short_term_aligned and long_term_aligned:
+        momentum_score = min(100, momentum_score * 1.2)
+    elif not short_term_aligned and not long_term_aligned:
+        momentum_score *= 0.7
+    
+    # 3. URGENCY SCORE (0-100) - Sweet spot 2-24h
+    if hours_to_expiry <= 0:
+        urgency_score = 0
+    elif hours_to_expiry <= 2:
+        urgency_score = 85
+    elif hours_to_expiry <= 6:
+        urgency_score = 95 + (6 - hours_to_expiry) * 1
+    elif hours_to_expiry <= 24:
+        urgency_score = 70 + (24 - hours_to_expiry) / 18 * 25
+    elif hours_to_expiry <= 72:
+        urgency_score = 40 + (72 - hours_to_expiry) / 48 * 30
+    elif hours_to_expiry <= 168:
+        urgency_score = 20 + (168 - hours_to_expiry) / 96 * 20
+    else:
+        urgency_score = max(5, 20 - (hours_to_expiry - 168) / 168 * 15)
+    
+    # 4. SPREAD SCORE (0-100) - Tighter = better
+    if best_bid is not None and best_ask is not None and best_ask > 0:
+        spread = best_ask - best_bid
+        spread_pct = spread / best_ask
+        if spread_pct <= 0.01:
+            spread_score = 100
+        elif spread_pct <= 0.02:
+            spread_score = 90 + (0.02 - spread_pct) / 0.01 * 10
+        elif spread_pct <= 0.05:
+            spread_score = 60 + (0.05 - spread_pct) / 0.03 * 30
+        elif spread_pct <= 0.10:
+            spread_score = 30 + (0.10 - spread_pct) / 0.05 * 30
+        else:
+            spread_score = max(0, 30 - (spread_pct - 0.10) * 200)
+    else:
+        spread_score = 30
+    
+    # 5. VOLUME SCORE (0-100) - Log scale
+    if volume > 0:
+        volume_log = math.log10(max(volume, 1))
+        volume_score = min(100, max(0, (volume_log - 2) * 20 + 30))
+    else:
+        volume_score = 10
+    
+    # 6. RISK/REWARD SCORE (0-100)
+    if direction == 'YES':
+        entry_price = best_ask if best_ask is not None else current_prob
+        potential_profit = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+    else:
+        entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - current_prob)
+        potential_profit = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+    
+    if potential_profit <= 0:
+        rr_score = 0
+    elif potential_profit <= 0.05:
+        rr_score = potential_profit / 0.05 * 50
+    elif potential_profit <= 0.10:
+        rr_score = 50 + (potential_profit - 0.05) / 0.05 * 20
+    elif potential_profit <= 0.20:
+        rr_score = 70 + (potential_profit - 0.10) / 0.10 * 15
+    elif potential_profit <= 0.50:
+        rr_score = 85 + (potential_profit - 0.20) / 0.30 * 10
+    else:
+        rr_score = min(100, 95 + (potential_profit - 0.50) * 10)
+    
+    # 7. CONFIDENCE MULTIPLIER
+    confidence = 1.0
+    if proximity_raw > 0.90 and momentum > 0.25:
+        confidence *= 1.10
+    if short_term_aligned and long_term_aligned:
+        confidence *= 1.05
+    if volume > 100000 and momentum > 0.20:
+        confidence *= 1.05
+    if spread_score > 80:
+        confidence *= 1.03
+    if proximity_raw > 0.85 and momentum < 0.10:
+        confidence *= 0.85
+    
+    # 8. DYNAMIC WEIGHTING
+    w_proximity = 0.25
+    w_momentum = 0.20
+    w_urgency = 0.20
+    w_spread = 0.10
+    w_volume = 0.10
+    w_rr = 0.15
+    
+    if hours_to_expiry <= 24:
+        w_urgency += 0.05
+        w_volume -= 0.05
+    if distance_to_target > 0.15:
+        w_momentum += 0.05
+        w_proximity -= 0.05
+    if spread_score < 50:
+        w_spread += 0.05
+        w_rr -= 0.05
+    
+    # 9. FINAL SCORE
+    raw_score = (
+        proximity_score * w_proximity +
+        momentum_score * w_momentum +
+        urgency_score * w_urgency +
+        spread_score * w_spread +
+        volume_score * w_volume +
+        rr_score * w_rr
+    )
+    final_score = min(100, raw_score * confidence)
+    
+    # 10. GRADE
+    if final_score >= 85:
+        grade, grade_color = "A+", "#27ae60"
+    elif final_score >= 75:
+        grade, grade_color = "A", "#2ecc71"
+    elif final_score >= 65:
+        grade, grade_color = "B+", "#f1c40f"
+    elif final_score >= 55:
+        grade, grade_color = "B", "#f39c12"
+    elif final_score >= 45:
+        grade, grade_color = "C+", "#e67e22"
+    elif final_score >= 35:
+        grade, grade_color = "C", "#e74c3c"
+    else:
+        grade, grade_color = "D", "#c0392b"
+    
+    return {
+        'total_score': final_score,
+        'grade': grade,
+        'grade_color': grade_color,
+        'components': {
+            'proximity': proximity_score,
+            'momentum': momentum_score,
+            'urgency': urgency_score,
+            'spread': spread_score,
+            'volume': volume_score,
+            'risk_reward': rr_score
+        },
+        'confidence': confidence,
+        'potential_profit': potential_profit
+    }
+
+
 def render_pullback_hunter():
     """Render the Pullback Hunter dashboard page."""
     
@@ -896,22 +1148,39 @@ def render_pullback_hunter():
         st.markdown("---")
         st.markdown("### ⚙️ Momentum Hunter Settings")
         
-        max_expiry_days = st.number_input(
-            "Max Days to Expiry", 
-            min_value=1, 
-            max_value=30, 
-            value=14,
-            help="Base window - extends 5x for high momentum (≥30%) markets"
+        max_expiry_hours = st.select_slider(
+            "Max Time to Expiry",
+            options=[24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600, 624, 648, 672, 696, 720],
+            value=336,
+            format_func=lambda x: f"{x//24}d",
+            help="Maximum time until market expiration"
         )
         
         min_extremity = st.slider(
-            "Min Extremity", 
-            min_value=0.15, 
-            max_value=0.45, 
-            value=0.25, 
-            step=0.05,
-            help="Distance from 50%: Markets >75%/<25% or >60%/<40% with ≥30% momentum"
+            "Max % from Extremes", 
+            min_value=5, 
+            max_value=50, 
+            value=25, 
+            step=5,
+            help="Show markets from 0-X% and (100-X)-100%. Ex: 25% shows 0-25% and 75-100%"
+        ) / 100.0  # Convert to decimal
+        
+        momentum_window_hours = st.select_slider(
+            "Momentum Time Window",
+            options=[12, 24, 48, 72, 96, 120, 144, 168],
+            value=48,
+            format_func=lambda x: f"{x}h" if x < 48 else f"{x//24}d",
+            help="Time window for measuring directional momentum. YES: price must be rising. NO: price must be falling."
         )
+        
+        min_momentum = st.slider(
+            "Min Momentum (%)",
+            min_value=0,
+            max_value=100,
+            value=10,
+            step=5,
+            help="Minimum composite momentum signal (0-100%). Combines proportional (log-odds) and absolute moves. Example: 5%→1% or 60%→88% both score high."
+        ) / 100.0  # Convert to decimal
         
         limit = st.number_input(
             "Max Markets to Scan", 
@@ -933,8 +1202,7 @@ def render_pullback_hunter():
     if st.button("🔍 Scan Markets", type="primary", use_container_width=True):
         with st.spinner("Scanning markets..."):
             try:
-                max_expiry_hours = max_expiry_days * 24
-                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode)
+                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum)
                 st.session_state['opportunities'] = opportunities
                 st.session_state['scan_time'] = datetime.now()
             except Exception as e:
@@ -959,7 +1227,7 @@ def render_pullback_hunter():
         st.info("👆 Click 'Scan Markets' to start")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False) -> List[Dict]:
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15) -> List[Dict]:
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
@@ -1046,10 +1314,8 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             now = datetime.now(timezone.utc)
             
             # Filter thresholds
-            max_hours_short = max_expiry_hours  # User-specified short window
-            max_hours_momentum = max_expiry_hours * 5  # Extended window for high momentum
-            min_momentum = 0.15  # 15% price change to qualify as momentum
-            high_momentum = 0.30  # 30%+ is high momentum (extends time window)
+            max_hours_short = max_expiry_hours  # User-specified window (hard cap)
+            high_momentum = 0.30  # 30% absolute momentum is considered high
             
             processed = 0
             skipped = 0
@@ -1064,11 +1330,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 # Extract price from lastTradePrice (or bestBid/bestAsk as fallback)
                 try:
                     yes_price = market.get('lastTradePrice')
+                    best_bid = market.get('bestBid')
+                    best_ask = market.get('bestAsk')
                     
-                    # If no lastTradePrice or it's 0, try bestBid/bestAsk average
-                    if yes_price is None or yes_price == 0:
-                        best_bid = market.get('bestBid')
-                        best_ask = market.get('bestAsk')
+                    # If no lastTradePrice, try bestBid/bestAsk average (0% is valid probability)
+                    if yes_price is None:
                         if best_bid is not None and best_ask is not None:
                             yes_price = (float(best_bid) + float(best_ask)) / 2
                         else:
@@ -1076,6 +1342,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                             continue
                     
                     yes_price = float(yes_price)
+                    if best_bid is not None:
+                        best_bid = float(best_bid)
+                    if best_ask is not None:
+                        best_ask = float(best_ask)
                     processed += 1
                 except (ValueError, TypeError, AttributeError):
                     skipped += 1
@@ -1093,9 +1363,63 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         hours_to_expiry = 0
                     
                     volume = float(market.get('volume') or 0)
-                    one_day_change = abs(float(market.get('oneDayPriceChange') or 0))
-                    one_week_change = abs(float(market.get('oneWeekPriceChange') or 0))
-                    momentum = max(one_day_change, one_week_change)
+                    
+                    # Get directional momentum (preserve sign)
+                    one_day_change = float(market.get('oneDayPriceChange') or 0)
+                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                    
+                    # Select momentum based on time window
+                    if momentum_window_hours <= 24:
+                        directional_momentum = one_day_change
+                    else:
+                        directional_momentum = one_week_change
+                    
+                    # Determine direction and check if momentum aligns
+                    direction = 'YES' if yes_price >= 0.5 else 'NO'
+                    
+                    # Filter: YES must have positive momentum, NO must have negative momentum
+                    if direction == 'YES' and directional_momentum <= 0:
+                        continue  # Skip - YES markets need rising prices
+                    if direction == 'NO' and directional_momentum >= 0:
+                        continue  # Skip - NO markets need falling prices
+                    
+                    # Calculate composite momentum using advanced algorithm
+                    momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
+                    momentum = momentum_data['signal_strength']  # 0-1 scale
+                    
+                    # Filter by minimum momentum
+                    if momentum < min_momentum:
+                        continue
+                    
+                    # Calculate annualized yield using ask/bid prices
+                    # For YES: buy at bestAsk (asking price for YES tokens)
+                    # For NO: buy NO tokens, which means selling YES at bestBid
+                    if direction == 'YES':
+                        entry_price = best_ask if best_ask is not None else yes_price
+                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                    else:
+                        # NO direction: entry price is (1 - bestBid) for YES
+                        entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
+                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+                    
+                    hours_in_year = 8760
+                    if hours_to_expiry > 0:
+                        annualized_yield = ((1 + profit_if_win) ** (hours_in_year / hours_to_expiry)) - 1
+                    else:
+                        annualized_yield = 0
+                    
+                    # Calculate advanced opportunity score
+                    score_data = calculate_opportunity_score(
+                        current_prob=yes_price,
+                        momentum=momentum,
+                        hours_to_expiry=hours_to_expiry,
+                        volume=volume,
+                        best_bid=best_bid,
+                        best_ask=best_ask,
+                        direction=direction,
+                        one_day_change=one_day_change,
+                        one_week_change=one_week_change
+                    )
                     
                     opportunities.append({
                         'question': market.get('question', 'Unknown'),
@@ -1106,20 +1430,44 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'end_date': end_dt,
                         'volume_24h': volume,
                         'momentum': momentum,
-                        'score': 0,  # No scoring in debug mode
-                        'direction': 'YES' if yes_price >= 0.5 else 'NO'
+                        'score': score_data['total_score'],
+                        'grade': score_data['grade'],
+                        'direction': direction,
+                        'annualized_yield': annualized_yield,
+                        'best_bid': best_bid,
+                        'best_ask': best_ask
                     })
                     continue
                 
-                # Check if extreme
-                is_extreme_yes = yes_price >= (0.5 + min_extremity)
-                is_extreme_no = yes_price <= (0.5 - min_extremity)
+                # Get directional momentum (preserve sign)
+                one_day_change = float(market.get('oneDayPriceChange') or 0)
+                one_week_change = float(market.get('oneWeekPriceChange') or 0)
                 
-                # Get momentum data (price changes)
-                one_day_change = abs(float(market.get('oneDayPriceChange') or 0))
-                one_week_change = abs(float(market.get('oneWeekPriceChange') or 0))
-                momentum = max(one_day_change, one_week_change)  # Best of 24h or 1w
-                has_high_momentum = momentum >= high_momentum
+                # Select momentum based on time window
+                if momentum_window_hours <= 24:
+                    directional_momentum = one_day_change
+                else:
+                    directional_momentum = one_week_change
+                
+                # Check if extreme (0 to X% or (100-X) to 100%)
+                is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme
+                is_extreme_no = yes_price <= min_extremity  # Bottom extreme
+                
+                # Filter: YES must have positive momentum, NO must have negative momentum
+                if is_extreme_yes and directional_momentum <= 0:
+                    continue  # Skip - YES markets need rising prices
+                if is_extreme_no and directional_momentum >= 0:
+                    continue  # Skip - NO markets need falling prices
+                
+                # Calculate composite momentum using advanced algorithm
+                momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
+                momentum = momentum_data['signal_strength']  # 0-1 scale
+                
+                # Filter by minimum momentum
+                if momentum < min_momentum:
+                    continue
+                
+                has_high_momentum = momentum >= 0.25  # 25% composite signal strength
                 
                 # Get expiration
                 end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
@@ -1139,23 +1487,46 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 if not qualifies:
                     continue
                 
-                # High momentum markets get extended window, others use user setting
-                effective_max_hours = max_hours_momentum if has_high_momentum else max_hours_short
-                
-                if hours_to_expiry <= 0 or hours_to_expiry > effective_max_hours:
+                # Apply user's expiry filter as hard cap
+                if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
                     continue
                 
                 # Get volume
                 volume = float(market.get('volume') or 0)
                 
-                # Calculate score (momentum-weighted)
-                distance_from_50 = abs(yes_price - 0.5)
-                urgency_score = max(0, (max_hours_short - hours_to_expiry) / max_hours_short)  # Caps at 1.0
-                volume_score = min(volume / 100000, 1.0)
-                momentum_score = min(momentum / 0.5, 1.0)  # Caps at 50% change
+                # Determine direction
+                direction = 'YES' if is_extreme_yes else 'NO'
                 
-                # Weight: 30% extremity, 25% urgency, 20% volume, 25% momentum
-                score = (distance_from_50 * 30) + (urgency_score * 25) + (volume_score * 20) + (momentum_score * 25)
+                # Calculate annualized yield using ask/bid prices
+                
+                # For YES: buy at bestAsk (asking price for YES tokens)
+                # For NO: buy NO tokens, which means selling YES at bestBid
+                if direction == 'YES':
+                    entry_price = best_ask if best_ask is not None else yes_price
+                    profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                else:
+                    # NO direction: entry price is (1 - bestBid) for YES
+                    entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
+                    profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+                
+                hours_in_year = 8760
+                if hours_to_expiry > 0:
+                    annualized_yield = ((1 + profit_if_win) ** (hours_in_year / hours_to_expiry)) - 1
+                else:
+                    annualized_yield = 0
+                
+                # Calculate advanced opportunity score
+                score_data = calculate_opportunity_score(
+                    current_prob=yes_price,
+                    momentum=momentum,
+                    hours_to_expiry=hours_to_expiry,
+                    volume=volume,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    direction=direction,
+                    one_day_change=one_day_change,
+                    one_week_change=one_week_change
+                )
                 
                 opportunities.append({
                     'question': market.get('question', 'Unknown'),
@@ -1166,8 +1537,12 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     'end_date': end_dt,
                     'volume_24h': volume,
                     'momentum': momentum,
-                    'score': score,
-                    'direction': 'YES' if is_extreme_yes else 'NO'
+                    'score': score_data['total_score'],
+                    'grade': score_data['grade'],
+                    'direction': direction,
+                    'annualized_yield': annualized_yield,
+                    'best_bid': best_bid,
+                    'best_ask': best_ask
                 })
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
@@ -1189,10 +1564,35 @@ def display_pullback_table(opportunities: List[Dict]):
     
     st.markdown("### Momentum Opportunities")
     
-    # Sort by expiration - soonest first
-    opportunities = sorted(opportunities, key=lambda x: x['hours_to_expiry'])
+    if not opportunities:
+        st.warning("No opportunities to display")
+        return
     
-    # Build HTML table directly for better control
+    # Sorting options
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        sort_method = st.selectbox(
+            "Sort by:",
+            ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
+             "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
+            index=0
+        )
+    
+    # Sort opportunities based on selection
+    if sort_method == "Score (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: x['score'], reverse=True)
+    elif sort_method == "Probability (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: x['current_prob'], reverse=True)
+    elif sort_method == "Probability (Low to High)":
+        opportunities = sorted(opportunities, key=lambda x: x['current_prob'])
+    elif sort_method == "Momentum (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: x.get('momentum', 0), reverse=True)
+    elif sort_method == "APY (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: x.get('annualized_yield', 0), reverse=True)
+    elif sort_method == "Expires (Soonest First)":
+        opportunities = sorted(opportunities, key=lambda x: x['hours_to_expiry'])
+    
+    # Build HTML table
     html = """
     <style>
         .momentum-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; font-family: Helvetica, Arial, sans-serif; }
@@ -1218,13 +1618,15 @@ def display_pullback_table(opportunities: List[Dict]):
     <table class="momentum-table">
         <thead>
             <tr>
-                <th style="width: 40%;">Market</th>
+                <th style="width: 35%;">Market</th>
                 <th style="width: 8%;">Prob</th>
-                <th style="width: 8%;">Dir</th>
-                <th style="width: 10%;">Mom</th>
-                <th style="width: 10%;">Vol</th>
-                <th style="width: 14%;">Expires</th>
-                <th style="width: 10%;">Score</th>
+                <th style="width: 7%;">Dir</th>
+                <th style="width: 8%;">Price</th>
+                <th style="width: 8%;">Mom</th>
+                <th style="width: 8%;">Vol</th>
+                <th style="width: 10%;">Expires</th>
+                <th style="width: 10%;">APY</th>
+                <th style="width: 8%;">Score</th>
             </tr>
         </thead>
         <tbody>
@@ -1234,16 +1636,25 @@ def display_pullback_table(opportunities: List[Dict]):
         question = opp['question'][:65] + "..." if len(opp['question']) > 65 else opp['question']
         url = opp['url']
         
-        # Probability
+        # Probability - 1 decimal
         prob = opp['current_prob']
         prob_class = "prob-yes" if prob > 0.5 else "prob-no"
-        prob_str = f"{prob:.0%}"
+        prob_str = f"{prob:.1%}"
         
-        # Direction (text only, no emoji)
+        # Direction
         direction = "YES" if opp['direction'] == "YES" else "NO"
         dir_class = "prob-yes" if direction == "YES" else "prob-no"
         
-        # Momentum (no emoji)
+        # Bid/Ask for this direction - 1 decimal
+        best_bid = opp.get('best_bid')
+        best_ask = opp.get('best_ask')
+        if direction == "YES":
+            price_display = f"${best_ask:.2f}" if best_ask is not None else "N/A"
+        else:
+            # For NO, show (1 - best_bid)
+            price_display = f"${(1.0 - best_bid):.2f}" if best_bid is not None else "N/A"
+        
+        # Momentum - 1 decimal
         momentum = opp.get('momentum', 0)
         if momentum >= 0.30:
             mom_class = "mom-high"
@@ -1251,7 +1662,7 @@ def display_pullback_table(opportunities: List[Dict]):
             mom_class = "mom-med"
         else:
             mom_class = "mom-low"
-        mom_str = f"{momentum:+.0%}"
+        mom_str = f"{momentum:+.1%}"
         
         # Volume
         vol = opp['volume_24h']
@@ -1271,24 +1682,45 @@ def display_pullback_table(opportunities: List[Dict]):
         exp_date = opp['end_date'].strftime('%m/%d')
         exp_str = f"{time_str} {exp_date}"
         
-        # Score
+        # Score with grade from scoring algorithm
         score = opp['score']
-        if score >= 70:
-            grade, score_class = "A", "score-a"
-        elif score >= 60:
-            grade, score_class = "B", "score-b"
+        grade = opp.get('grade', 'C')
+        
+        # Determine CSS class based on grade
+        if grade in ['A+', 'A']:
+            score_class = "score-a"
+        elif grade in ['B+', 'B']:
+            score_class = "score-b"
         else:
-            grade, score_class = "C", "score-c"
+            score_class = "score-c"
+        
         score_str = f"{score:.0f} {grade}"
+        
+        # Annualized Yield - 1 decimal
+        ann_yield = opp.get('annualized_yield', 0)
+        if ann_yield > 10:  # >1000%
+            apy_class = "score-a"
+            apy_str = f"{ann_yield:.1%}"
+        elif ann_yield > 2:  # >200%
+            apy_class = "score-a"
+            apy_str = f"{ann_yield:.1%}"
+        elif ann_yield > 0.5:  # >50%
+            apy_class = "score-b"
+            apy_str = f"{ann_yield:.1%}"
+        else:
+            apy_class = "score-c"
+            apy_str = f"{ann_yield:.1%}"
         
         html += f"""
             <tr>
                 <td><a href="{url}" class="market-link" target="_blank">{question}</a></td>
                 <td><span class="{prob_class}">{prob_str}</span></td>
                 <td><span class="{dir_class}">{direction}</span></td>
+                <td>{price_display}</td>
                 <td><span class="{mom_class}">{mom_str}</span></td>
                 <td>{vol_str}</td>
                 <td><span class="{exp_class}">{exp_str}</span></td>
+                <td><span class="{apy_class}">{apy_str}</span></td>
                 <td><span class="{score_class}">{score_str}</span></td>
             </tr>
         """

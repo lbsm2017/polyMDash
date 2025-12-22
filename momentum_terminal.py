@@ -230,6 +230,26 @@ async def scan_momentum_markets():
             # Weight: 30% extremity, 25% urgency, 20% volume, 25% momentum
             score = (distance_from_50 * 30) + (urgency_score * 25) + (volume_score * 20) + (momentum_score * 25)
             
+            # Calculate annualized yield
+            # For YES: buying at yes_price, resolves to 1.0, profit = (1 - yes_price) / yes_price
+            # For NO: buying NO at (1 - yes_price), resolves to 1.0, profit = yes_price / (1 - yes_price)
+            direction = 'YES' if is_extreme_yes else 'NO'
+            
+            if direction == 'YES':
+                entry_price = yes_price
+                profit_if_win = (1.0 - yes_price) / yes_price if yes_price > 0 else 0
+            else:
+                entry_price = 1.0 - yes_price
+                profit_if_win = yes_price / (1.0 - yes_price) if yes_price < 1.0 else 0
+            
+            # Annualize: (1 + return) ^ (8760 / hours) - 1
+            # 8760 hours in a year
+            hours_in_year = 8760
+            if hours_to_expiry > 0:
+                annualized_yield = ((1 + profit_if_win) ** (hours_in_year / hours_to_expiry)) - 1
+            else:
+                annualized_yield = 0
+            
             opportunities.append({
                 'question': market.get('question', 'Unknown'),
                 'slug': market.get('slug', ''),
@@ -240,7 +260,10 @@ async def scan_momentum_markets():
                 'momentum': momentum,
                 'one_day_change': one_day_change,
                 'score': score,
-                'direction': 'YES' if is_extreme_yes else 'NO'
+                'direction': direction,
+                'entry_price': entry_price,
+                'profit_if_win': profit_if_win,
+                'annualized_yield': annualized_yield
             })
         
         # Sort by score
@@ -318,12 +341,28 @@ async def scan_momentum_markets():
                 score_color = Fore.CYAN
                 grade = "C"
             
+            # Annualized yield formatting
+            ann_yield = opp.get('annualized_yield', 0)
+            if ann_yield > 10:  # >1000%
+                yield_color = Fore.GREEN + Style.BRIGHT
+                yield_str = f"🚀{ann_yield:.0%}"
+            elif ann_yield > 2:  # >200%
+                yield_color = Fore.GREEN
+                yield_str = f"📈{ann_yield:.0%}"
+            elif ann_yield > 0.5:  # >50%
+                yield_color = Fore.YELLOW
+                yield_str = f"↗{ann_yield:.0%}"
+            else:
+                yield_color = Style.DIM
+                yield_str = f"{ann_yield:.0%}"
+            
             # Print opportunity
             print(f"{Style.BRIGHT}#{i:2d}{Style.RESET_ALL} "
                   f"{score_color}[{score:.0f} {grade}]{Style.RESET_ALL} "
                   f"{dir_color}{dir_symbol} {opp['direction']:3s} {prob_display:>6s}{Style.RESET_ALL} "
                   f"│ {mom_color}{mom_str:>7s}{Style.RESET_ALL} "
                   f"│ {time_color}⏰ {time_str:>6s}{Style.RESET_ALL} "
+                  f"│ {yield_color}APY {yield_str:>8s}{Style.RESET_ALL} "
                   f"│ {Style.DIM}💰 ${opp['volume']:>8,.0f}{Style.RESET_ALL}")
             
             # Question on next line
