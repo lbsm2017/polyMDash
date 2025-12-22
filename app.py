@@ -1348,6 +1348,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             processed = 0
             skipped = 0
             
+            # Debug logging flag (configurable via environment or session state)
+            enable_debug_logging = st.session_state.get('enable_price_debug', False)
+            debug_count = 0
+            max_debug_logs = 5
+            
             for market in filtered:
                 # Get outcomes - handle multi-outcome events
                 outcomes = market.get('outcomes', [])
@@ -1363,8 +1368,20 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 # This works for both binary and multi-outcome markets
                 market_url = f"https://polymarket.com/market/{market_slug}"
                 
+                # Determine if binary market (Yes/No) or multi-outcome
+                is_binary = len(outcomes) == 2 and all(
+                    o.lower() in ['yes', 'no'] for o in outcomes
+                )
+                
+                # For binary markets, ONLY process YES (index 0) - industry standard
+                # For multi-outcome markets, process ALL outcomes
+                outcome_indices = [0] if is_binary else range(len(outcomes))
+                
                 # Process EACH outcome as a separate opportunity
-                for outcome_idx, outcome_name in enumerate(outcomes):
+                for outcome_idx in outcome_indices:
+                    if outcome_idx >= len(outcomes):
+                        continue
+                    outcome_name = outcomes[outcome_idx]
                     # Extract price for this specific outcome
                     try:
                         # For binary markets, outcomes = ['Yes', 'No']
@@ -1381,6 +1398,12 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         
                         yes_price = float(outcome_prices[outcome_idx])
                         
+                        # Debug logging for first few markets (if enabled)
+                        if enable_debug_logging and debug_count < max_debug_logs:
+                            logger.info(f"DEBUG: Market '{parent_question[:60]}' | Type: {'BINARY' if is_binary else 'MULTI'} | Outcomes: {outcomes} | Prices: {outcome_prices}")
+                            logger.info(f"  -> Processing outcome_idx={outcome_idx} ({outcome_name}), price={yes_price:.4f}")
+                            debug_count += 1
+                        
                         # For multi-outcome markets, bid/ask might not be available per outcome
                         # Use the market-level bid/ask for binary, or estimate from price
                         best_bid = market.get('bestBid')
@@ -1393,19 +1416,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                             best_bid = max(0.001, yes_price - spread_estimate / 2)
                             best_ask = min(0.999, yes_price + spread_estimate / 2)
                         else:
-                            # Binary market - use actual bid/ask if available
-                            if outcome_idx == 0:  # YES side
-                                if best_bid is not None:
-                                    best_bid = float(best_bid)
-                                if best_ask is not None:
-                                    best_ask = float(best_ask)
-                            else:  # NO side (inverse)
-                                if best_bid is not None and best_ask is not None:
-                                    # Flip bid/ask for NO side
-                                    temp_bid = 1.0 - float(best_ask)
-                                    temp_ask = 1.0 - float(best_bid)
-                                    best_bid = temp_bid
-                                    best_ask = temp_ask
+                            # Binary market - always use YES side bid/ask (outcome_idx=0)
+                            if best_bid is not None:
+                                best_bid = float(best_bid)
+                            if best_ask is not None:
+                                best_ask = float(best_ask)
                         
                         # Fallback if no bid/ask
                         if best_bid is None:
@@ -1441,13 +1456,9 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         else:
                             directional_momentum = one_week_change
                         
-                        # Determine direction and check if momentum aligns
-                        direction = 'YES' if yes_price >= 0.5 else 'NO'
-                        
-                        # Filter: YES must have positive momentum, NO must have negative momentum
-                        if direction == 'YES' and directional_momentum <= 0:
-                            continue  # Skip - YES markets need rising prices
-                        if direction == 'NO' and directional_momentum >= 0:
+                    # Determine direction based on YES price
+                    # For binary markets, we're always trading YES side (we filtered to outcome_idx=0)
+                    # Direction indicates whether we're betting YES will rise or fall
                             continue  # Skip - NO markets need falling prices
                         
                         # Calculate composite momentum using advanced algorithm
@@ -1533,14 +1544,16 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         directional_momentum = one_week_change
                     
                     # Check if extreme (0 to X% or (100-X) to 100%)
-                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme
-                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme
+                    # We're always looking at YES price since outcome_idx=0 for binary markets
+                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme (e.g., >85%)
+                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme (e.g., <15%)
                     
-                    # Filter: YES must have positive momentum, NO must have negative momentum
+                    # Filter: HIGH probability (YES) needs positive momentum, LOW probability (NO) needs negative
+                    # This ensures we're catching pullbacks and momentum continuations
                     if is_extreme_yes and directional_momentum <= 0:
-                        continue  # Skip - YES markets need rising prices
+                        continue  # Skip - high probability markets need rising prices
                     if is_extreme_no and directional_momentum >= 0:
-                        continue  # Skip - NO markets need falling prices
+                        continue  # Skip - low probability markets need falling prices (pullback)
                     
                     # Calculate composite momentum using advanced algorithm
                     momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
@@ -1613,9 +1626,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     )
                     
                     # Format question with outcome name for multi-outcome markets
-                    # Only show brackets for TRUE multi-outcome markets (3+ outcomes)
-                    # AND when outcome name is meaningful (not single char, not Yes/No)
+                    # For binary markets, never show brackets (we only process YES)
+                    # For multi-outcome markets (3+), show outcome name in brackets
                     should_show_bracket = (
+                        not is_binary and
                         len(outcomes) > 2 and 
                         outcome_name and 
                         len(outcome_name) > 3 and
@@ -1647,11 +1661,11 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             opportunities.sort(key=lambda x: x['score'], reverse=True)
             logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
             
-            # Log first 3 opportunities for debugging
-            if opportunities:
-                logger.info("Sample opportunities:")
+            # Log sample opportunities for validation (configurable)
+            if opportunities and enable_debug_logging:
+                logger.info("Sample opportunities (top 3):")
                 for i, opp in enumerate(opportunities[:3], 1):
-                    logger.info(f"  {i}. {opp['question'][:50]} - {opp['current_prob']:.0%} - {opp['momentum']:+.0%}")
+                    logger.info(f"  {i}. {opp['question'][:60]} | Prob: {opp['current_prob']:.1%} | Dir: {opp['direction']} | Mom: {opp['momentum']:+.1%} | Score: {opp['score']:.1f}")
             
             return opportunities
     
