@@ -2306,8 +2306,8 @@ def scan_arbitrage_markets(min_outcomes: int = 2, limit: int = 500,
                             end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
                             now = datetime.now(timezone.utc)
                             hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                        except:
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse end_date '{end_date}': {e}")
                     
                     results.append({
                         'question': question,
