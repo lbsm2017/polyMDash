@@ -1,6 +1,12 @@
 """
 Tests for Arbitrage Scanner functionality.
 """
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pytest
 from app import calculate_arbitrage_opportunities, detect_non_exclusive_outcomes
 
