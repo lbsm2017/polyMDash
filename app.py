@@ -99,7 +99,7 @@ def main():
     st.sidebar.markdown("**Strategy**")
     strategy = st.sidebar.radio(
         "Select Strategy:",
-        ["Conviction Tracker", "Momentum Hunter"],
+        ["Conviction Tracker", "Momentum Hunter", "Arbitrage Scanner"],
         index=1,
         help="Choose trading strategy"
     )
@@ -108,6 +108,9 @@ def main():
     # Route to appropriate strategy
     if strategy == "Momentum Hunter":
         render_pullback_hunter()
+        return
+    elif strategy == "Arbitrage Scanner":
+        render_arbitrage_scanner()
         return
     
     # Continue with Conviction Tracker
@@ -1822,6 +1825,940 @@ def display_pullback_table(opportunities: List[Dict]):
     # Use st.write with HTML to ensure proper rendering
     import streamlit.components.v1 as components
     components.html(html, height=min(len(opportunities) * 35 + 100, 1200), scrolling=True)
+
+
+# ============================================================================
+# ARBITRAGE SCANNER STRATEGY
+# ============================================================================
+
+def detect_non_exclusive_outcomes(outcomes: List[str], question: str) -> bool:
+    """
+    Detect if outcomes might NOT be mutually exclusive.
+    
+    Examples of non-exclusive patterns:
+    - ">2%" and ">3%" (if 3.5%, both win)
+    - "Over 100" and "Over 200" (if 250, both win)
+    - "At least 50%" and "At least 75%" (if 80%, both win)
+    
+    Returns True if market appears to have non-exclusive outcomes.
+    """
+    if len(outcomes) < 2:
+        return False
+    
+    # Keywords that suggest range/threshold markets
+    range_keywords = [
+        'over', 'under', 'above', 'below', 'more than', 'less than',
+        'at least', 'at most', 'greater', 'higher', 'lower', 'exceed',
+        '>', '<', '≥', '≤', 'minimum', 'maximum'
+    ]
+    
+    # Check if multiple outcomes contain range keywords
+    outcomes_with_ranges = 0
+    for outcome in outcomes:
+        outcome_lower = outcome.lower()
+        if any(keyword in outcome_lower for keyword in range_keywords):
+            outcomes_with_ranges += 1
+    
+    # If 2+ outcomes have range keywords, likely non-exclusive
+    if outcomes_with_ranges >= 2:
+        return True
+    
+    # Check for percentage/number patterns that suggest ranges
+    import re
+    number_patterns = []
+    for outcome in outcomes:
+        # Look for patterns like ">2%", "Over 100", "<50"
+        if re.search(r'[><≥≤]\s*\d+', outcome):
+            number_patterns.append(outcome)
+    
+    # If 2+ outcomes have comparison operators with numbers, likely non-exclusive
+    if len(number_patterns) >= 2:
+        return True
+    
+    return False
+
+
+def calculate_arbitrage_opportunities(
+    outcomes: List[str], 
+    outcome_prices: List[float],
+    best_bids: List[float], 
+    best_asks: List[float]
+) -> Dict:
+    """
+    Calculate ALL possible arbitrage opportunities with rigorous math.
+    
+    For N outcomes where exactly ONE will resolve to $1 and others to $0:
+    
+    STRATEGY 1: BUY ALL OUTCOMES
+    - Cost = Σ(ask_i) for all i
+    - Guaranteed return = $1 (exactly one wins)
+    - Profit = $1 - Cost
+    - Arbitrage exists if: Σ(ask_i) < 1.0
+    
+    STRATEGY 2: SELL ALL OUTCOMES  
+    - Revenue = Σ(bid_i) for all i
+    - Liability = $1 (must pay winner)
+    - Profit = Revenue - $1
+    - Arbitrage exists if: Σ(bid_i) > 1.0
+    
+    STRATEGY 3: BINARY MARKET YES/NO ARBITRAGE
+    - For 2-outcome markets only
+    - Check: bid_YES + bid_NO > 1 (sell both)
+    - Check: ask_YES + ask_NO < 1 (buy both)
+    - Check: bid_YES > ask_NO (buy NO, sell YES equivalent)
+    - Check: bid_NO > ask_YES (buy YES, sell NO equivalent)
+    
+    Returns dict with all opportunities and their exact P&L.
+    """
+    n = len(outcomes)
+    
+    if n < 2 or len(outcome_prices) < n:
+        return {'opportunities': [], 'best_opportunity': None}
+    
+    # Check for non-mutually exclusive outcomes
+    non_exclusive = detect_non_exclusive_outcomes(outcomes, '')
+    
+    # Ensure we have proper bid/ask arrays
+    if len(best_bids) < n:
+        best_bids = best_bids + [max(0.001, outcome_prices[i] - 0.01) for i in range(len(best_bids), n)]
+    if len(best_asks) < n:
+        best_asks = best_asks + [min(0.999, outcome_prices[i] + 0.01) for i in range(len(best_asks), n)]
+    
+    opportunities = []
+    
+    # ==========================================================================
+    # STRATEGY 1: BUY ALL OUTCOMES AT ASK
+    # ==========================================================================
+    # Logic: Pay ask price for each outcome. Exactly one resolves to $1.
+    # P&L = $1 - Σ(ask_i)
+    total_ask = sum(best_asks)
+    buy_all_profit = 1.0 - total_ask
+    
+    opportunities.append({
+        'strategy': 'BUY_ALL',
+        'description': f'Buy all {n} outcomes at ASK prices',
+        'action': 'BUY',
+        'cost': total_ask,
+        'guaranteed_return': 1.0,
+        'profit': buy_all_profit,
+        'profit_pct': buy_all_profit * 100,
+        'is_profitable': buy_all_profit > 0,
+        'execution': [{'outcome': outcomes[i], 'side': 'BUY', 'price': best_asks[i]} for i in range(n)],
+        'formula': f'$1.00 - Σ(asks) = $1.00 - ${total_ask:.4f} = ${buy_all_profit:.4f}',
+        'risk': 'Zero (guaranteed profit)' if buy_all_profit > 0 else 'N/A'
+    })
+    
+    # ==========================================================================
+    # STRATEGY 2: SELL ALL OUTCOMES AT BID
+    # ==========================================================================
+    # Logic: Receive bid price for each outcome. Must pay $1 to winner.
+    # P&L = Σ(bid_i) - $1
+    total_bid = sum(best_bids)
+    sell_all_profit = total_bid - 1.0
+    
+    opportunities.append({
+        'strategy': 'SELL_ALL',
+        'description': f'Sell all {n} outcomes at BID prices',
+        'action': 'SELL',
+        'revenue': total_bid,
+        'liability': 1.0,
+        'profit': sell_all_profit,
+        'profit_pct': sell_all_profit * 100,
+        'is_profitable': sell_all_profit > 0,
+        'execution': [{'outcome': outcomes[i], 'side': 'SELL', 'price': best_bids[i]} for i in range(n)],
+        'formula': f'Σ(bids) - $1.00 = ${total_bid:.4f} - $1.00 = ${sell_all_profit:.4f}',
+        'risk': 'Zero (guaranteed profit)' if sell_all_profit > 0 else 'N/A'
+    })
+    
+    # ==========================================================================
+    # STRATEGY 3: CROSS-OUTCOME ARBITRAGE (for each outcome)
+    # ==========================================================================
+    for i in range(n):
+        other_asks_sum = sum(best_asks[j] for j in range(n) if j != i)
+        
+        # Action: SELL i at bid_i, BUY all j≠i at ask_j
+        # Entry cash: bid_i - other_asks_sum
+        # At resolution:
+        #   If i wins: I owe $1 to buyer, others worth $0 → -$1
+        #   If j wins: I owe $0, I receive $1 from j → +$1
+        
+        pnl_if_i_wins = best_bids[i] - other_asks_sum - 1.0
+        pnl_if_j_wins = best_bids[i] - other_asks_sum + 1.0
+        
+        # Guaranteed profit = minimum P&L across all scenarios
+        guaranteed_profit = min(pnl_if_i_wins, pnl_if_j_wins)
+        
+        opportunities.append({
+            'strategy': f'CROSS_{i}',
+            'description': f'Sell "{outcomes[i]}" + Buy all others',
+            'action': 'HEDGE',
+            'target_outcome': outcomes[i],
+            'entry_cash': best_bids[i] - other_asks_sum,
+            'pnl_if_target_wins': pnl_if_i_wins,
+            'pnl_if_other_wins': pnl_if_j_wins,
+            'profit': guaranteed_profit,
+            'profit_pct': guaranteed_profit * 100,
+            'is_profitable': guaranteed_profit > 0,
+            'execution': [
+                {'outcome': outcomes[i], 'side': 'SELL', 'price': best_bids[i]}
+            ] + [
+                {'outcome': outcomes[j], 'side': 'BUY', 'price': best_asks[j]} 
+                for j in range(n) if j != i
+            ],
+            'formula': f'Min(${pnl_if_i_wins:.4f}, ${pnl_if_j_wins:.4f}) = ${guaranteed_profit:.4f}',
+            'risk': 'Zero (guaranteed profit)' if guaranteed_profit > 0 else 'N/A'
+        })
+        
+        # Reverse: Buy outcome i, sell all others
+        other_bids_sum = sum(best_bids[j] for j in range(n) if j != i)
+        
+        # Action: BUY i at ask_i, SELL all j≠i at bid_j
+        # Entry cash: -ask_i + Σ(bid_j≠i) = other_bids_sum - ask_i
+        # At resolution:
+        #   If i wins: I receive $1, others owe $0 → +$1
+        #   If j wins: I receive $0, I owe $1 to j's buyer → -$1
+        
+        pnl_if_i_wins_rev = (other_bids_sum - best_asks[i]) + 1.0
+        pnl_if_j_wins_rev = (other_bids_sum - best_asks[i]) - 1.0
+        
+        guaranteed_profit_rev = min(pnl_if_i_wins_rev, pnl_if_j_wins_rev)
+        
+        opportunities.append({
+            'strategy': f'CROSS_REV_{i}',
+            'description': f'Buy "{outcomes[i]}" + Sell all others',
+            'action': 'HEDGE',
+            'target_outcome': outcomes[i],
+            'entry_cash': other_bids_sum - best_asks[i],
+            'pnl_if_target_wins': pnl_if_i_wins_rev,
+            'pnl_if_other_wins': pnl_if_j_wins_rev,
+            'profit': guaranteed_profit_rev,
+            'profit_pct': guaranteed_profit_rev * 100,
+            'is_profitable': guaranteed_profit_rev > 0,
+            'execution': [
+                {'outcome': outcomes[i], 'side': 'BUY', 'price': best_asks[i]}
+            ] + [
+                {'outcome': outcomes[j], 'side': 'SELL', 'price': best_bids[j]} 
+                for j in range(n) if j != i
+            ],
+            'formula': f'Min(${pnl_if_i_wins_rev:.4f}, ${pnl_if_j_wins_rev:.4f}) = ${guaranteed_profit_rev:.4f}',
+            'risk': 'Zero (guaranteed profit)' if guaranteed_profit_rev > 0 else 'N/A'
+        })
+    
+    # ==========================================================================
+    # STRATEGY 4: BINARY MARKET SPECIFIC (n=2)
+    # ==========================================================================
+    if n == 2:
+        yes_bid, yes_ask = best_bids[0], best_asks[0]
+        no_bid, no_ask = best_bids[1], best_asks[1]
+        
+        # Synthetic YES = 1 - NO
+        # If YES_bid > (1 - NO_ask), sell YES + buy NO
+        synthetic_no_ask = 1.0 - no_ask  # Cost to create synthetic YES via NO
+        if yes_bid > synthetic_no_ask and yes_bid > 0.001:
+            synth_profit = yes_bid - synthetic_no_ask
+            opportunities.append({
+                'strategy': 'SYNTH_YES',
+                'description': 'Sell YES + Buy NO (synthetic arbitrage)',
+                'action': 'SYNTHETIC',
+                'profit': synth_profit,
+                'profit_pct': synth_profit * 100,
+                'is_profitable': synth_profit > 0,
+                'execution': [
+                    {'outcome': 'YES', 'side': 'SELL', 'price': yes_bid},
+                    {'outcome': 'NO', 'side': 'BUY', 'price': no_ask}
+                ],
+                'formula': f'YES_bid - (1-NO_ask) = {yes_bid:.4f} - {synthetic_no_ask:.4f} = ${synth_profit:.4f}',
+                'risk': 'Zero (positions cancel)'
+            })
+        
+        # Synthetic NO check
+        synthetic_yes_ask = 1.0 - yes_ask
+        if no_bid > synthetic_yes_ask and no_bid > 0.001:
+            synth_profit = no_bid - synthetic_yes_ask
+            opportunities.append({
+                'strategy': 'SYNTH_NO',
+                'description': 'Sell NO + Buy YES (synthetic arbitrage)',
+                'action': 'SYNTHETIC',
+                'profit': synth_profit,
+                'profit_pct': synth_profit * 100,
+                'is_profitable': synth_profit > 0,
+                'execution': [
+                    {'outcome': 'NO', 'side': 'SELL', 'price': no_bid},
+                    {'outcome': 'YES', 'side': 'BUY', 'price': yes_ask}
+                ],
+                'formula': f'NO_bid - (1-YES_ask) = {no_bid:.4f} - {synthetic_yes_ask:.4f} = ${synth_profit:.4f}',
+                'risk': 'Zero (positions cancel)'
+            })
+    
+    # Find best profitable opportunity
+    profitable = [o for o in opportunities if o['is_profitable']]
+    best_opportunity = max(profitable, key=lambda x: x['profit']) if profitable else None
+    
+    # Calculate summary metrics
+    return {
+        'opportunities': opportunities,
+        'profitable_opportunities': profitable,
+        'best_opportunity': best_opportunity,
+        'n_outcomes': n,
+        'total_bid_sum': total_bid,
+        'total_ask_sum': total_ask,
+        'mid_sum': sum(outcome_prices),
+        'overround_bid': (total_bid - 1.0) * 100,
+        'overround_ask': (total_ask - 1.0) * 100,
+        'overround_mid': (sum(outcome_prices) - 1.0) * 100,
+        'has_arbitrage': len(profitable) > 0,
+        'max_profit': best_opportunity['profit'] if best_opportunity else 0,
+        'max_profit_pct': best_opportunity['profit_pct'] if best_opportunity else 0,
+        'non_exclusive_warning': non_exclusive
+    }
+
+
+def calculate_inefficiency_score(arb_result: Dict) -> float:
+    """
+    Calculate an inefficiency score (0-100) for ranking markets.
+    Higher = more interesting for analysis.
+    """
+    score = 0
+    
+    # Major bonus for actual arbitrage
+    if arb_result['has_arbitrage']:
+        score += 50 + min(50, arb_result['max_profit_pct'] * 10)
+    else:
+        # Score based on how close to arbitrage
+        bid_deviation = abs(arb_result['overround_bid'])
+        ask_deviation = abs(arb_result['overround_ask'])
+        
+        score += min(30, bid_deviation * 3)
+        score += min(30, ask_deviation * 3)
+        
+        # Bonus for wide spreads (indicates opportunity)
+        spread = arb_result['total_ask_sum'] - arb_result['total_bid_sum']
+        score += min(20, spread * 50)
+    
+    # More outcomes = more complexity = potentially more opportunities
+    n = arb_result['n_outcomes']
+    if n >= 5:
+        score += 10
+    elif n >= 3:
+        score += 5
+    
+    return min(100, score)
+
+
+@st.cache_data(ttl=60)
+def scan_arbitrage_markets(min_outcomes: int = 2, limit: int = 500,
+                           show_all: bool = False) -> List[Dict]:
+    """Scan markets for arbitrage opportunities with rigorous math."""
+    
+    async def fetch():
+        async with GammaClient() as client:
+            all_markets = []
+            
+            logger.info("Fetching markets for arbitrage scan...")
+            
+            # Fetch from multiple sources for diversity
+            for order_by in ["volume", "liquidity", ""]:
+                try:
+                    markets = await client.get_markets(limit=limit, active=True, closed=False, order_by=order_by)
+                    all_markets.extend(markets)
+                except Exception as e:
+                    logger.warning(f"Fetch with order_by={order_by} failed: {e}")
+            
+            # Deduplicate
+            seen = set()
+            markets = []
+            for m in all_markets:
+                slug = m.get('slug', '')
+                if slug and slug not in seen:
+                    seen.add(slug)
+                    markets.append(m)
+            
+            logger.info(f"Processing {len(markets)} unique markets")
+            
+            results = []
+            
+            # Debug counters
+            filtered_outcomes = 0
+            filtered_prices = 0
+            processed = 0
+            errors = 0
+            
+            # Debug: check first market structure
+            if markets and len(markets) > 0:
+                sample = markets[0]
+                logger.info(f"Sample market keys: {list(sample.keys())}")
+                logger.info(f"Sample outcomes: {sample.get('outcomes', 'MISSING')}")
+                logger.info(f"Sample outcomePrices: {sample.get('outcomePrices', 'MISSING')}")
+            
+            for market in markets:
+                try:
+                    # Parse outcomes - may be JSON string or list
+                    outcomes = market.get('outcomes', [])
+                    if isinstance(outcomes, str):
+                        import json
+                        try:
+                            outcomes = json.loads(outcomes)
+                        except:
+                            # If JSON parsing fails, might be comma-separated
+                            outcomes = [o.strip() for o in outcomes.split(',') if o.strip()]
+                    
+                    # Ensure it's a list
+                    if not isinstance(outcomes, list):
+                        outcomes = []
+                    
+                    n = len(outcomes)
+                    
+                    # Debug first few failures
+                    if n == 0 and filtered_outcomes < 3:
+                        logger.warning(f"Market {market.get('question', 'Unknown')[:50]} has 0 outcomes. Keys: {list(market.keys())}")
+                    
+                    # In debug mode, process everything; otherwise apply filters
+                    if not show_all:
+                        if n < min_outcomes:
+                            filtered_outcomes += 1
+                            continue
+                    
+                    # Get prices
+                    outcome_prices = market.get('outcomePrices', [])
+                    if isinstance(outcome_prices, str):
+                        import json
+                        outcome_prices = json.loads(outcome_prices)
+                    
+                    # Debug price issues
+                    if len(outcome_prices) < n and filtered_prices < 3:
+                        logger.warning(f"Market {market.get('question', 'Unknown')[:50]} has {n} outcomes but {len(outcome_prices)} prices")
+                    
+                    # In debug mode, handle missing prices gracefully; otherwise filter
+                    if not show_all:
+                        if len(outcome_prices) < n:
+                            filtered_prices += 1
+                            continue
+                    else:
+                        # Debug mode: pad with zeros if missing prices
+                        if len(outcome_prices) < n:
+                            outcome_prices = outcome_prices + [0.0] * (n - len(outcome_prices))
+                    
+                    # Handle edge case: no outcomes at all
+                    if n == 0:
+                        if not show_all:
+                            filtered_outcomes += 1
+                            continue
+                        else:
+                            # Debug mode: create dummy binary market
+                            outcomes = ['YES', 'NO']
+                            outcome_prices = [0.5, 0.5]
+                            n = 2
+                    
+                    outcome_prices = [float(p) if p else 0.0 for p in outcome_prices[:max(n, len(outcome_prices))]]
+                    if len(outcome_prices) < n:
+                        outcome_prices = outcome_prices + [0.0] * (n - len(outcome_prices))
+                    
+                    # Get volume (for display only, not filtering)
+                    volume = float(market.get('volume') or 0)
+                    
+                    processed += 1
+                    
+                    # Get bid/ask - handle binary vs multi-outcome
+                    best_bid = market.get('bestBid')
+                    best_ask = market.get('bestAsk')
+                    
+                    if n == 2 and best_bid is not None and best_ask is not None:
+                        # Binary market with actual bid/ask
+                        yes_bid = float(best_bid)
+                        yes_ask = float(best_ask)
+                        # NO bid/ask are complements
+                        no_bid = 1.0 - yes_ask  # Selling NO = buying YES at ask
+                        no_ask = 1.0 - yes_bid  # Buying NO = selling YES at bid
+                        best_bids = [yes_bid, no_bid]
+                        best_asks = [yes_ask, no_ask]
+                    else:
+                        # Multi-outcome or no bid/ask data - estimate spread
+                        liquidity = float(market.get('liquidity') or 0)
+                        spread_estimate = 0.02 if liquidity > 10000 else 0.03
+                        
+                        best_bids = [max(0.001, p - spread_estimate/2) for p in outcome_prices]
+                        best_asks = [min(0.999, p + spread_estimate/2) for p in outcome_prices]
+                    
+                    # Calculate ALL arbitrage opportunities
+                    arb_result = calculate_arbitrage_opportunities(
+                        outcomes, outcome_prices, best_bids, best_asks
+                    )
+                    
+                    # Calculate inefficiency score
+                    ineff_score = calculate_inefficiency_score(arb_result)
+                    
+                    # Filter: only include if profitable OR show_all is True
+                    if not show_all and not arb_result['has_arbitrage']:
+                        continue
+                    
+                    # Get market metadata
+                    question = market.get('question', 'Unknown')
+                    slug = market.get('slug', '')
+                    url = f"https://polymarket.com/market/{slug}"
+                    liquidity = float(market.get('liquidity') or 0)
+                    
+                    # Expiration
+                    end_date = market.get('endDate') or market.get('end_date_iso')
+                    hours_to_expiry = None
+                    if end_date:
+                        try:
+                            from datetime import datetime, timezone
+                            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                            now = datetime.now(timezone.utc)
+                            hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse end_date '{end_date}': {e}")
+                    
+                    results.append({
+                        'question': question,
+                        'slug': slug,
+                        'url': url,
+                        'n_outcomes': n,
+                        'outcomes': outcomes,
+                        'outcome_prices': outcome_prices,
+                        'best_bids': best_bids,
+                        'best_asks': best_asks,
+                        'volume': volume,
+                        'liquidity': liquidity,
+                        'hours_to_expiry': hours_to_expiry,
+                        'arb_result': arb_result,
+                        'has_arbitrage': arb_result['has_arbitrage'],
+                        'max_profit': arb_result['max_profit'],
+                        'max_profit_pct': arb_result['max_profit_pct'],
+                        'best_strategy': arb_result['best_opportunity']['strategy'] if arb_result['best_opportunity'] else None,
+                        'inefficiency_score': ineff_score,
+                        'bid_sum': arb_result['total_bid_sum'],
+                        'ask_sum': arb_result['total_ask_sum'],
+                        'mid_sum': arb_result['mid_sum'],
+                        'overround_mid': arb_result['overround_mid'],
+                        'non_exclusive_warning': arb_result.get('non_exclusive_warning', False)
+                    })
+                    
+                except Exception as e:
+                    errors += 1
+                    if errors <= 3:
+                        logger.warning(f"Error processing market: {e}")
+                    continue
+            
+            # Sort by inefficiency score (highest first)
+            results.sort(key=lambda x: x['inefficiency_score'], reverse=True)
+            
+            arb_count = sum(1 for r in results if r['has_arbitrage'])
+            logger.info(f"Found {len(results)} markets, {arb_count} with arbitrage opportunities")
+            logger.info(f"Filters applied: {filtered_outcomes} by outcomes, {filtered_prices} by prices, {errors} errors")
+            logger.info(f"Processed {processed} markets, {len(results)} included in results")
+            
+            # Store filter stats for display
+            if results or show_all:
+                filter_stats = {
+                    'total_fetched': len(markets),
+                    'filtered_outcomes': filtered_outcomes,
+                    'filtered_prices': filtered_prices,
+                    'processed': processed,
+                    'included': len(results),
+                    'with_arbitrage': arb_count
+                }
+                # Attach to first result if exists
+                if results:
+                    results[0]['_filter_stats'] = filter_stats
+                else:
+                    # Create a dummy entry to hold stats
+                    results.append({'_filter_stats': filter_stats, '_is_stats_only': True})
+            
+            return results
+    
+    return asyncio.run(fetch())
+
+
+def render_arbitrage_scanner():
+    """Render the Arbitrage Scanner dashboard."""
+    
+    st.markdown('<h2 style="margin-top: -1rem; margin-bottom: 0.3rem;">⚖️ Arbitrage Scanner</h2>', unsafe_allow_html=True)
+    st.caption("Rigorous analysis of all BID/ASK combinations for guaranteed profit opportunities")
+    
+    # Sidebar settings
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### ⚙️ Arbitrage Settings")
+        
+        min_outcomes = st.slider("Min Outcomes", 2, 10, 2)
+        
+        # Min Profit filter with discrete steps
+        profit_steps = [1, 10, 25, 50, 100, 250, 500]
+        min_profit_idx = st.select_slider(
+            "Min Profit ($)",
+            options=range(len(profit_steps)),
+            value=0,  # Default to $1 (index 0)
+            format_func=lambda i: f"${profit_steps[i]}",
+            help="Minimum absolute profit in dollars"
+        )
+        min_profit = profit_steps[min_profit_idx]
+        
+        limit = st.number_input("Max Markets", 50, 5000, 1000)
+        
+        st.markdown("---")
+        
+        # DEBUG TOGGLE - shows non-profitable too
+        debug_mode = st.checkbox(
+            "🐛 Debug Mode (Show All)",
+            value=False,
+            help="Show ALL markets including non-profitable ones to understand the data feed"
+        )
+        
+        st.markdown("---")
+        st.markdown("**Strategy Types:**")
+        st.markdown("""
+        - **BUY_ALL**: Buy every outcome
+        - **SELL_ALL**: Sell every outcome  
+        - **CROSS_n**: Sell one + buy rest
+        - **SYNTH**: YES/NO synthetic arb
+        """)
+        
+        st.markdown("---")
+        st.markdown("**Math Verification:**")
+        st.markdown("""
+        ✓ Exactly ONE outcome = $1  
+        ✓ All others = $0  
+        ✓ P&L calculated for ALL scenarios  
+        ✓ Only guaranteed profits shown
+        """)
+        
+        st.markdown("---")
+        st.warning("""
+        **⚠️ Important:** This scanner assumes **mutually exclusive** outcomes (only ONE can win).
+        
+        **Does NOT work for:**
+        - Range markets (e.g., ">2%" AND ">3%")
+        - Overlapping thresholds
+        - Non-exclusive conditions
+        
+        Markets flagged with ⚠️ may have multiple winners.
+        """)
+    
+    # Scan controls
+    col_scan, col_sort, col_stats = st.columns([1.5, 2, 2])
+    
+    with col_scan:
+        scan_clicked = st.button("🔍 Scan Markets", type="primary", use_container_width=True)
+    
+    with col_sort:
+        if 'arb_results' in st.session_state and st.session_state['arb_results']:
+            sort_method = st.selectbox(
+                "Sort:",
+                ["Profit %", "Inefficiency Score", "Book Sum", "# Outcomes", "Volume"],
+                index=0,
+                label_visibility="collapsed"
+            )
+            st.session_state['arb_sort'] = sort_method
+    
+    with col_stats:
+        if 'arb_results' in st.session_state:
+            results = st.session_state['arb_results']
+            # Filter out stats-only entry
+            real_results = [r for r in results if not r.get('_is_stats_only', False)]
+            scan_time = st.session_state.get('arb_time', datetime.now())
+            arb_count = sum(1 for r in real_results if r.get('has_arbitrage', False))
+            
+            if debug_mode:
+                msg = f'📊 {len(real_results)} markets ({arb_count} profitable)'
+            else:
+                msg = f'✅ {arb_count} arbitrage opportunities'
+            
+            st.markdown(
+                f'<div style="padding: 0.4rem; background: #d4edda; color: #155724; '
+                f'border-radius: 0.25rem;">{msg} @ {scan_time.strftime("%H:%M:%S")}</div>',
+                unsafe_allow_html=True
+            )
+    
+    # Handle scan
+    if scan_clicked:
+        with st.spinner("Scanning all bid/ask combinations..."):
+            try:
+                results = scan_arbitrage_markets(
+                    min_outcomes=min_outcomes,
+                    limit=limit,
+                    show_all=debug_mode
+                )
+                st.session_state['arb_results'] = results
+                st.session_state['arb_time'] = datetime.now()
+                st.session_state['arb_min_profit'] = min_profit
+                st.rerun()
+            except Exception as e:
+                logger.error(f"Scan error: {e}", exc_info=True)
+                st.error(f"Error: {str(e)}")
+                return
+    
+    # Display results
+    if 'arb_results' in st.session_state:
+        results = st.session_state['arb_results']
+        min_profit_filter = st.session_state.get('arb_min_profit', 1)
+        
+        if results:
+            display_arbitrage_results(results, debug_mode, min_profit_filter)
+        else:
+            if debug_mode:
+                st.warning("No markets found matching filters.")
+            else:
+                st.info("🎯 No arbitrage opportunities found. This is expected - markets are usually efficient!")
+                st.caption("Enable 'Debug Mode' to see all markets and understand pricing.")
+
+
+def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit: float = 1):
+    """Display arbitrage analysis results."""
+    
+    # Check for filter stats and display them in debug mode
+    filter_stats = None
+    if results and '_filter_stats' in results[0]:
+        filter_stats = results[0]['_filter_stats']
+        # Remove stats-only entry if exists
+        if results[0].get('_is_stats_only'):
+            results = results[1:]
+    
+    # Also filter any other stats entries that might exist
+    results = [r for r in results if not r.get('_is_stats_only', False)]
+    
+    # Apply min profit filter (convert to absolute dollars)
+    filtered_count = len(results)
+    if not debug_mode:
+        # Only filter in non-debug mode
+        results = [r for r in results if r.get('max_profit', 0) >= (min_profit / 100.0)]
+        filtered_by_profit = filtered_count - len(results)
+    else:
+        filtered_by_profit = 0
+    
+    if debug_mode and filter_stats:
+        st.info(
+            f"📊 **Scan Statistics:** "
+            f"Fetched {filter_stats['total_fetched']} markets | "
+            f"Filtered: {filter_stats['filtered_outcomes']} (outcomes), "
+            f"{filter_stats['filtered_prices']} (prices) | "
+            f"Processed: {filter_stats['processed']} | "
+            f"Results: {filter_stats['included']} (Arb: {filter_stats['with_arbitrage']})"
+        )
+    
+    if filtered_by_profit > 0:
+        st.caption(f"🔽 {filtered_by_profit} markets filtered by min profit ${min_profit}")
+    
+    # Check if we have any real results after filtering
+    if not results:
+        if debug_mode:
+            st.warning("No markets found. Try adjusting filters (especially Min Volume).")
+        else:
+            st.warning(f"No arbitrage opportunities with profit ≥ ${min_profit}. Try lowering Min Profit filter.")
+        return
+    
+    # Apply sorting
+    sort_method = st.session_state.get('arb_sort', 'Profit %')
+    
+    if sort_method == "Profit %":
+        results = sorted(results, key=lambda x: x['max_profit_pct'], reverse=True)
+    elif sort_method == "Inefficiency Score":
+        results = sorted(results, key=lambda x: x['inefficiency_score'], reverse=True)
+    elif sort_method == "Book Sum":
+        results = sorted(results, key=lambda x: abs(x['mid_sum'] - 1.0), reverse=True)
+    elif sort_method == "# Outcomes":
+        results = sorted(results, key=lambda x: x['n_outcomes'], reverse=True)
+    elif sort_method == "Volume":
+        results = sorted(results, key=lambda x: x['volume'], reverse=True)
+    
+    # Summary metrics
+    profitable = [r for r in results if r.get('has_arbitrage', False)]
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Markets Scanned", len(results))
+    with col2:
+        st.metric("Arbitrage Found", len(profitable))
+    with col3:
+        if profitable:
+            max_p = max(r['max_profit_pct'] for r in profitable)
+            st.metric("Best Profit", f"{max_p:.3f}%")
+        else:
+            st.metric("Best Profit", "0%")
+    with col4:
+        avg_book = sum(r['mid_sum'] for r in results) / len(results) if results else 1.0
+        st.metric("Avg Book Sum", f"{avg_book:.2%}")
+    
+    st.markdown("---")
+    
+    # Build table
+    html = """
+    <style>
+        .arb-tbl { width:100%; border-collapse:collapse; font-size:0.82rem; font-family:monospace; }
+        .arb-tbl th { background:#1a252f; color:#fff; padding:6px; text-align:left; }
+        .arb-tbl td { padding:5px 6px; border-bottom:1px solid #ddd; }
+        .arb-tbl tr:nth-child(even) { background:#f5f5f5; }
+        .arb-tbl tr:hover { background:#e3f2fd; }
+        .arb-tbl a { color:#1976d2; text-decoration:none; }
+        .arb-tbl a:hover { text-decoration:underline; }
+        .profit { color:#2e7d32; font-weight:600; }
+        .no-profit { color:#9e9e9e; }
+        .book-over { color:#c62828; }
+        .book-under { color:#2e7d32; }
+        .book-ok { color:#1976d2; }
+    </style>
+    <table class="arb-tbl">
+        <tr>
+            <th>Market</th>
+            <th>N</th>
+            <th>Σ Bid</th>
+            <th>Σ Ask</th>
+            <th>Book</th>
+            <th>Strategy</th>
+            <th>Profit</th>
+            <th>Volume</th>
+        </tr>
+    """
+    
+    for r in results[:100]:
+        q = r['question'][:50] + "..." if len(r['question']) > 50 else r['question']
+        
+        # Add warning icon if non-exclusive
+        if r.get('non_exclusive_warning', False):
+            q = "⚠️ " + q
+        
+        url = r['url']
+        
+        n = r['n_outcomes']
+        bid_sum = r['bid_sum']
+        ask_sum = r['ask_sum']
+        mid_sum = r['mid_sum']
+        
+        # Book sum coloring
+        if mid_sum > 1.02:
+            book_class = "book-over"
+        elif mid_sum < 0.98:
+            book_class = "book-under"
+        else:
+            book_class = "book-ok"
+        
+        # Profit
+        if r['has_arbitrage']:
+            profit_str = f'<span class="profit">+{r["max_profit_pct"]:.3f}%</span>'
+            strategy = r['best_strategy'] or '-'
+        else:
+            profit_str = '<span class="no-profit">-</span>'
+            strategy = '-'
+        
+        # Volume
+        vol = r['volume']
+        vol_str = f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K" if vol >= 1000 else f"${vol:.0f}"
+        
+        html += f"""
+        <tr>
+            <td><a href="{url}" target="_blank">{q}</a></td>
+            <td>{n}</td>
+            <td>{bid_sum:.3f}</td>
+            <td>{ask_sum:.3f}</td>
+            <td class="{book_class}">{mid_sum:.3f}</td>
+            <td>{strategy}</td>
+            <td>{profit_str}</td>
+            <td>{vol_str}</td>
+        </tr>
+        """
+    
+    html += "</table>"
+    
+    import streamlit.components.v1 as components
+    components.html(html, height=min(len(results) * 32 + 80, 800), scrolling=True)
+    
+    # Detailed view for profitable opportunities
+    if profitable:
+        st.markdown("---")
+        st.markdown("### 📋 Detailed Arbitrage Analysis")
+        
+        for i, r in enumerate(profitable[:10], 1):
+            arb = r['arb_result']
+            best = arb['best_opportunity']
+            
+            with st.expander(f"#{i} {r['question'][:60]}... → +{r['max_profit_pct']:.3f}%"):
+                # Warning for non-exclusive outcomes
+                if r.get('non_exclusive_warning', False):
+                    st.error("⚠️ **WARNING:** This market may have NON-MUTUALLY EXCLUSIVE outcomes. Multiple outcomes could resolve to YES, invalidating arbitrage math. Verify manually!")
+                
+                # Market info
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown(f"**Outcomes:** {r['n_outcomes']}")
+                    st.markdown(f"**Volume:** ${r['volume']:,.0f}")
+                with col2:
+                    st.markdown(f"**Σ Bids:** {r['bid_sum']:.4f}")
+                    st.markdown(f"**Σ Asks:** {r['ask_sum']:.4f}")
+                with col3:
+                    st.markdown(f"**Book Sum:** {r['mid_sum']:.4f}")
+                    st.markdown(f"[View Market]({r['url']})")
+                
+                st.markdown("---")
+                
+                # Best opportunity
+                st.markdown("**✅ BEST STRATEGY:**")
+                st.success(f"**{best['strategy']}**: {best['description']}")
+                st.markdown(f"**Formula:** `{best['formula']}`")
+                st.markdown(f"**Guaranteed Profit:** ${best['profit']:.4f} ({best['profit_pct']:.3f}%)")
+                
+                # Execution steps
+                st.markdown("**Execution:**")
+                exec_df = []
+                for step in best['execution']:
+                    outcome_name = str(step['outcome']) if step['outcome'] else 'Unknown'
+                    exec_df.append({
+                        'Action': step['side'],
+                        'Outcome': outcome_name,
+                        'Price': f"${step['price']:.4f}"
+                    })
+                st.dataframe(exec_df, use_container_width=True, hide_index=True)
+                
+                # All strategies analysis
+                st.markdown("---")
+                st.markdown("**All Strategies Analyzed:**")
+                
+                strat_data = []
+                for opp in arb['opportunities']:
+                    strat_data.append({
+                        'Strategy': opp['strategy'],
+                        'Description': opp['description'][:40],
+                        'Profit': f"${opp['profit']:.4f}",
+                        'Profitable': '✅' if opp['is_profitable'] else '❌'
+                    })
+                st.dataframe(strat_data, use_container_width=True, hide_index=True)
+                
+                # Outcome breakdown
+                st.markdown("---")
+                st.markdown("**Outcome Prices:**")
+                
+                outcome_data = []
+                for j, (name, price, bid, ask) in enumerate(zip(
+                    r['outcomes'], r['outcome_prices'], r['best_bids'], r['best_asks']
+                )):
+                    outcome_name = str(name) if name else f'Outcome {j+1}'
+                    outcome_data.append({
+                        'Outcome': outcome_name,
+                        'Mid': f"{price:.2%}",
+                        'Bid': f"{bid:.4f}",
+                        'Ask': f"{ask:.4f}",
+                        'Spread': f"{(ask-bid)*100:.2f}%"
+                    })
+                st.dataframe(outcome_data, use_container_width=True, hide_index=True)
+    
+    # Debug: show non-profitable analysis
+    if debug_mode:
+        non_profitable = [r for r in results if not r['has_arbitrage']]
+        if non_profitable:
+            st.markdown("---")
+            st.markdown("### 🔍 Non-Profitable Markets (Debug)")
+            st.caption("These markets are efficiently priced - no guaranteed profit exists")
+            
+            for r in non_profitable[:5]:
+                with st.expander(f"{r['question'][:50]}... (Book: {r['mid_sum']:.3f})"):
+                    st.markdown(f"**Σ Bids:** {r['bid_sum']:.4f} | **Σ Asks:** {r['ask_sum']:.4f}")
+                    
+                    arb = r['arb_result']
+                    st.markdown("**Why no arbitrage:**")
+                    
+                    # Show why each strategy fails
+                    for opp in arb['opportunities'][:4]:
+                        if not opp['is_profitable']:
+                            st.markdown(f"- **{opp['strategy']}**: {opp['formula']} → Loss of ${abs(opp['profit']):.4f}")
 
 
 if __name__ == "__main__":
