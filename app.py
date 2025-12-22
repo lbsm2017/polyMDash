@@ -9,6 +9,7 @@ import asyncio
 from typing import List, Dict, Optional, Tuple
 import logging
 import math
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -954,6 +955,205 @@ def calculate_composite_momentum(current_price: float, price_change: float) -> d
     }
 
 
+def estimate_volatility(
+    best_bid: float,
+    best_ask: float,
+    current_prob: float,
+    one_day_change: float,
+    one_week_change: float
+) -> float:
+    """
+    Estimate hourly volatility from market data.
+    
+    Uses bid-ask spread as primary indicator, supplemented by price change variance.
+    Returns annualized volatility scaled to hourly.
+    """
+    # Method 1: Bid-ask spread as volatility proxy
+    if best_bid is not None and best_ask is not None and best_ask > best_bid:
+        spread = best_ask - best_bid
+        spread_vol = spread / max(current_prob, 0.01)
+        # Annualize spread-based volatility (assuming spread ~ 2σ)
+        spread_volatility = spread_vol * 0.5 * np.sqrt(252 * 24)  # Trading hours in year
+    else:
+        spread_volatility = 0.15  # Default 15% annualized
+    
+    # Method 2: Historical price variance
+    if abs(one_day_change) > 0 or abs(one_week_change) > 0:
+        # Use larger change as volatility signal
+        price_vol = max(abs(one_day_change), abs(one_week_change))
+        # Scale to annualized (assuming independent daily moves)
+        hist_volatility = price_vol * np.sqrt(252)
+    else:
+        hist_volatility = 0.10  # Default 10% annualized
+    
+    # Combine both methods (weighted average)
+    combined_vol = 0.6 * spread_volatility + 0.4 * hist_volatility
+    
+    # Convert to hourly volatility
+    hourly_vol = combined_vol / np.sqrt(252 * 24)
+    
+    # Cap at reasonable bounds
+    return np.clip(hourly_vol, 0.001, 0.10)  # 0.1% to 10% per hour
+
+
+def simulate_price_paths(
+    current_price: float,
+    drift: float,
+    volatility: float,
+    hours_remaining: float,
+    n_paths: int = 1000,
+    time_steps: int = 100
+) -> np.ndarray:
+    """
+    Simulate price paths using geometric Brownian motion in logit space.
+    
+    Args:
+        current_price: Current probability (0-1)
+        drift: Expected hourly drift rate
+        volatility: Hourly volatility
+        hours_remaining: Hours until expiration
+        n_paths: Number of Monte Carlo paths
+        time_steps: Number of time steps per path
+    
+    Returns:
+        Array of shape (n_paths, time_steps+1) with simulated paths
+    """
+    if hours_remaining <= 0:
+        return np.full((n_paths, 1), current_price)
+    
+    dt = hours_remaining / time_steps
+    
+    # Work in logit space for bounded [0,1] simulation
+    # X = log(P / (1-P))
+    current_price_clamped = np.clip(current_price, 0.001, 0.999)
+    X = np.log(current_price_clamped / (1 - current_price_clamped))
+    
+    # Initialize paths
+    paths = np.zeros((n_paths, time_steps + 1))
+    paths[:, 0] = current_price_clamped
+    
+    # Simulate in logit space
+    X_paths = np.full(n_paths, X)
+    
+    for t in range(1, time_steps + 1):
+        # Generate random shocks
+        dW = np.random.standard_normal(n_paths) * np.sqrt(dt)
+        
+        # Update in logit space: dX = drift*dt + vol*dW
+        X_paths = X_paths + drift * dt + volatility * dW
+        
+        # Transform back to probability space
+        paths[:, t] = 1 / (1 + np.exp(-X_paths))
+        paths[:, t] = np.clip(paths[:, t], 0.001, 0.999)
+    
+    return paths
+
+
+def calculate_path_statistics(
+    current_prob: float,
+    momentum: float,
+    hours_to_expiry: float,
+    volatility: float,
+    direction: str,
+    one_day_change: float = 0,
+    one_week_change: float = 0
+) -> dict:
+    """
+    Calculate statistical confidence metrics using Monte Carlo simulation.
+    
+    Returns:
+        dict with hit_probability, expected_final, confidence_interval, etc.
+    """
+    # Handle edge cases
+    if hours_to_expiry <= 0:
+        return {
+            'hit_probability': 0.0,
+            'expected_final': current_prob,
+            'ci_lower': current_prob,
+            'ci_upper': current_prob,
+            'median_time_to_target': 0,
+            'path_volatility': 0.0,
+            'confidence_grade': 'LOW'
+        }
+    
+    # Estimate drift from momentum and direction
+    # Momentum is 0-1 scale, convert to hourly drift
+    directional_momentum = momentum if direction == 'YES' else -momentum
+    
+    # Scale momentum to realistic hourly drift (-0.05 to +0.05 per hour in logit space)
+    drift = directional_momentum * 0.1
+    
+    # Run Monte Carlo simulation
+    n_paths = 1000
+    time_steps = min(100, int(hours_to_expiry) + 1)
+    
+    paths = simulate_price_paths(
+        current_price=current_prob,
+        drift=drift,
+        volatility=volatility,
+        hours_remaining=hours_to_expiry,
+        n_paths=n_paths,
+        time_steps=time_steps
+    )
+    
+    # Extract terminal prices
+    terminal_prices = paths[:, -1]
+    
+    # Calculate hit probability (reached >99% or <1%)
+    if direction == 'YES':
+        target_threshold = 0.99
+        hits = np.max(paths, axis=1) >= target_threshold
+    else:
+        target_threshold = 0.01
+        hits = np.min(paths, axis=1) <= target_threshold
+    
+    hit_probability = np.mean(hits)
+    
+    # Calculate expected final price and confidence interval
+    expected_final = np.mean(terminal_prices)
+    ci_lower = np.percentile(terminal_prices, 2.5)
+    ci_upper = np.percentile(terminal_prices, 97.5)
+    
+    # Calculate median time to target (for paths that hit)
+    if hit_probability > 0:
+        times_to_target = []
+        for path in paths:
+            if direction == 'YES':
+                hit_idx = np.where(path >= target_threshold)[0]
+            else:
+                hit_idx = np.where(path <= target_threshold)[0]
+            
+            if len(hit_idx) > 0:
+                time_step = hit_idx[0]
+                time_hours = (time_step / time_steps) * hours_to_expiry
+                times_to_target.append(time_hours)
+        
+        median_time = np.median(times_to_target) if times_to_target else hours_to_expiry
+    else:
+        median_time = hours_to_expiry
+    
+    # Calculate path volatility
+    path_volatility = np.std(terminal_prices)
+    
+    # Assign confidence grade
+    if hit_probability >= 0.80:
+        confidence_grade = 'HIGH'
+    elif hit_probability >= 0.50:
+        confidence_grade = 'MEDIUM'
+    else:
+        confidence_grade = 'LOW'
+    
+    return {
+        'hit_probability': hit_probability,
+        'expected_final': expected_final,
+        'ci_lower': ci_lower,
+        'ci_upper': ci_upper,
+        'median_time_to_target': median_time,
+        'path_volatility': path_volatility,
+        'confidence_grade': confidence_grade
+    }
+
+
 def calculate_opportunity_score(
     current_prob: float,
     momentum: float,
@@ -1103,7 +1303,49 @@ def calculate_opportunity_score(
     )
     final_score = min(100, raw_score * confidence)
     
-    # 10. GRADE
+    # 10. STATISTICAL CONFIDENCE (Monte Carlo Analysis)
+    # Estimate volatility from market data
+    volatility = estimate_volatility(
+        best_bid=best_bid,
+        best_ask=best_ask,
+        current_prob=current_prob,
+        one_day_change=one_day_change,
+        one_week_change=one_week_change
+    )
+    
+    # Calculate path statistics using Monte Carlo simulation
+    path_stats = calculate_path_statistics(
+        current_prob=current_prob,
+        momentum=momentum,
+        hours_to_expiry=hours_to_expiry,
+        volatility=volatility,
+        direction=direction,
+        one_day_change=one_day_change,
+        one_week_change=one_week_change
+    )
+    
+    # Adjust score based on statistical confidence
+    hit_probability = path_stats['hit_probability']
+    ci_width = path_stats['ci_upper'] - path_stats['ci_lower']
+    path_volatility = path_stats['path_volatility']
+    
+    # Statistical confidence multiplier (0.7 to 1.3)
+    stat_confidence = 0.7 + (hit_probability * 0.6)  # 50% hit → 1.0x, 100% hit → 1.3x
+    
+    # Uncertainty penalty (narrow CI = better)
+    uncertainty_factor = max(0.85, 1 - (ci_width * 0.5))
+    
+    # Apply statistical adjustments
+    final_score = min(100, final_score * stat_confidence * uncertainty_factor)
+    
+    # Upgrade grade if high statistical confidence
+    if hit_probability >= 0.85 and final_score >= 70:
+        if final_score < 85:
+            grade, grade_color = "A", "#2ecc71"
+        else:
+            grade, grade_color = "A+", "#27ae60"
+    
+    # 11. GRADE (Re-evaluate after statistical adjustment)
     if final_score >= 85:
         grade, grade_color = "A+", "#27ae60"
     elif final_score >= 75:
@@ -1132,7 +1374,16 @@ def calculate_opportunity_score(
             'risk_reward': rr_score
         },
         'confidence': confidence,
-        'potential_profit': potential_profit
+        'potential_profit': potential_profit,
+        # Statistical metrics
+        'hit_probability': hit_probability,
+        'expected_final': path_stats['expected_final'],
+        'ci_lower': path_stats['ci_lower'],
+        'ci_upper': path_stats['ci_upper'],
+        'median_time_to_target': path_stats['median_time_to_target'],
+        'path_volatility': path_volatility,
+        'confidence_grade': path_stats['confidence_grade'],
+        'statistical_confidence': stat_confidence
     }
 
 
@@ -1181,6 +1432,24 @@ def render_pullback_hunter():
             help="Minimum composite momentum signal (0-100%). Combines proportional (log-odds) and absolute moves. Example: 5%→1% or 60%→88% both score high."
         ) / 100.0  # Convert to decimal
         
+        st.markdown("---")
+        st.markdown("**📊 Statistical Filters**")
+        
+        min_hit_probability = st.slider(
+            "Min Hit Probability (%)",
+            min_value=0,
+            max_value=100,
+            value=0,
+            step=5,
+            help="Minimum probability of reaching target (0% or 100%) based on Monte Carlo simulation. 0 = no filter."
+        ) / 100.0
+        
+        show_confidence_metrics = st.checkbox(
+            "Show Statistical Metrics",
+            value=True,
+            help="Display hit probability, confidence intervals, and path volatility in results table"
+        )
+        
         limit = st.number_input(
             "Max Markets to Scan", 
             min_value=10, 
@@ -1206,10 +1475,14 @@ def render_pullback_hunter():
     with col_sort:
         # Sort dropdown (only shown when there are opportunities)
         if 'opportunities' in st.session_state and st.session_state['opportunities']:
+            sort_options = ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
+                          "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"]
+            if st.session_state.get('show_confidence_metrics', True):
+                sort_options.append("Hit Probability (High to Low)")
+            
             sort_method = st.selectbox(
                 "Sort by:",
-                ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
-                 "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
+                sort_options,
                 index=0,
                 label_visibility="collapsed"
             )
@@ -1231,9 +1504,25 @@ def render_pullback_hunter():
     if scan_clicked:
         with st.spinner("Scanning markets..."):
             try:
-                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum)
+                opportunities = scan_pullback_markets(
+                    max_expiry_hours, 
+                    min_extremity, 
+                    limit, 
+                    debug_mode, 
+                    momentum_window_hours, 
+                    min_momentum,
+                    min_hit_probability
+                )
+                # Apply hit probability filter
+                if min_hit_probability > 0:
+                    opportunities = [
+                        opp for opp in opportunities 
+                        if opp.get('hit_probability', 0) >= min_hit_probability
+                    ]
+                
                 st.session_state['opportunities'] = opportunities
                 st.session_state['scan_time'] = datetime.now()
+                st.session_state['show_confidence_metrics'] = show_confidence_metrics
                 st.rerun()
             except Exception as e:
                 logger.error(f"Scan error: {e}", exc_info=True)
@@ -1252,7 +1541,7 @@ def render_pullback_hunter():
             st.warning("No opportunities found. Try adjusting filters.")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15) -> List[Dict]:
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15, min_hit_probability: float = 0.0) -> List[Dict]:
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
@@ -1638,7 +1927,14 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'direction': direction,
                         'annualized_yield': annualized_yield,
                         'best_bid': best_bid,
-                        'best_ask': best_ask
+                        'best_ask': best_ask,
+                        # Statistical metrics from Monte Carlo
+                        'hit_probability': score_data.get('hit_probability', 0),
+                        'expected_final': score_data.get('expected_final', yes_price),
+                        'ci_lower': score_data.get('ci_lower', yes_price),
+                        'ci_upper': score_data.get('ci_upper', yes_price),
+                        'confidence_grade': score_data.get('confidence_grade', 'LOW'),
+                        'path_volatility': score_data.get('path_volatility', 0)
                     })
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
@@ -1680,6 +1976,11 @@ def display_pullback_table(opportunities: List[Dict]):
         opportunities = sorted(opportunities, key=lambda x: x.get('annualized_yield', 0), reverse=True)
     elif sort_method == "Expires (Soonest First)":
         opportunities = sorted(opportunities, key=lambda x: x['hours_to_expiry'])
+    elif sort_method == "Hit Probability (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: x.get('hit_probability', 0), reverse=True)
+    
+    # Check if we should show statistical metrics
+    show_stats = st.session_state.get('show_confidence_metrics', True)
     
     # Build HTML table
     html = """
@@ -1703,19 +2004,24 @@ def display_pullback_table(opportunities: List[Dict]):
         .score-a { color: #27ae60; font-weight: 600; }
         .score-b { color: #f39c12; font-weight: 600; }
         .score-c { color: #3498db; }
+        .conf-high { color: #27ae60; font-weight: 600; }
+        .conf-med { color: #f39c12; font-weight: 600; }
+        .conf-low { color: #95a5a6; }
     </style>
     <table class="momentum-table">
         <thead>
             <tr>
-                <th style="width: 35%;">Market</th>
-                <th style="width: 8%;">Prob</th>
-                <th style="width: 7%;">Dir</th>
-                <th style="width: 8%;">Price</th>
-                <th style="width: 8%;">Mom</th>
-                <th style="width: 8%;">Vol</th>
-                <th style="width: 10%;">Expires</th>
-                <th style="width: 10%;">APY</th>
-                <th style="width: 8%;">Score</th>
+                <th style="width: """ + ("25" if show_stats else "35") + """%;">Market</th>
+                <th style="width: 7%;">Prob</th>
+                <th style="width: 6%;">Dir</th>
+                <th style="width: 7%;">Price</th>
+                <th style="width: 7%;">Mom</th>
+                <th style="width: 7%;">Vol</th>""" + ("""
+                <th style="width: 8%;">Hit%</th>
+                <th style="width: 10%;">95% CI</th>""" if show_stats else "") + """
+                <th style="width: 9%;">Expires</th>
+                <th style="width: 9%;">APY</th>
+                <th style="width: 7%;">Score</th>
             </tr>
         </thead>
         <tbody>
@@ -1800,6 +2106,23 @@ def display_pullback_table(opportunities: List[Dict]):
             apy_class = "score-c"
             apy_str = f"{ann_yield:.1%}"
         
+        # Statistical metrics (if enabled)
+        if show_stats:
+            hit_prob = opp.get('hit_probability', 0)
+            ci_lower = opp.get('ci_lower', 0)
+            ci_upper = opp.get('ci_upper', 0)
+            
+            # Hit probability color
+            if hit_prob >= 0.80:
+                hit_class = "conf-high"
+            elif hit_prob >= 0.50:
+                hit_class = "conf-med"
+            else:
+                hit_class = "conf-low"
+            
+            hit_str = f"{hit_prob:.0%}"
+            ci_str = f"{ci_lower:.1%}-{ci_upper:.1%}"
+        
         html += f"""
             <tr>
                 <td><a href="{url}" class="market-link" target="_blank">{question}</a></td>
@@ -1807,7 +2130,9 @@ def display_pullback_table(opportunities: List[Dict]):
                 <td><span class="{dir_class}">{direction}</span></td>
                 <td>{price_display}</td>
                 <td><span class="{mom_class}">{mom_str}</span></td>
-                <td>{vol_str}</td>
+                <td>{vol_str}</td>""" + (f"""
+                <td><span class="{hit_class}">{hit_str}</span></td>
+                <td><span style="font-size: 0.8rem;">{ci_str}</span></td>""" if show_stats else "") + f"""
                 <td><span class="{exp_class}">{exp_str}</span></td>
                 <td><span class="{apy_class}">{apy_str}</span></td>
                 <td><span class="{score_class}">{score_str}</span></td>
