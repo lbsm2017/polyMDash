@@ -1291,23 +1291,6 @@ def render_pullback_hunter():
         opportunities = st.session_state['opportunities']
         
         if opportunities:
-            # DEBUG: Show raw Cardano data if present
-            cardano_opps = [o for o in opportunities if 'cardano' in o.get('question', '').lower() and 'etf' in o.get('question', '').lower()]
-            if cardano_opps:
-                with st.expander("🔍 DEBUG: Cardano ETF Raw Data", expanded=True):
-                    for opp in cardano_opps:
-                        st.json({
-                            'question': opp['question'],
-                            'current_prob': opp['current_prob'],
-                            'current_prob_pct': f"{opp['current_prob']*100:.2f}%",
-                            'direction': opp['direction'],
-                            'slug': opp['slug'],
-                            'best_bid': opp.get('best_bid'),
-                            'best_ask': opp.get('best_ask'),
-                            'data_version': st.session_state.get('data_version', 'unknown'),
-                            'scan_time': str(st.session_state.get('scan_time', 'unknown'))
-                        })
-                    st.error("⚠️ If current_prob shows 0.94 or 94%, this is the BUG - it should be ~0.059 (5.9%)")
             
             display_pullback_table(opportunities)
         else:
@@ -1415,6 +1398,20 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             for market in filtered:
                 # Get outcomes - handle multi-outcome events
                 outcomes = market.get('outcomes', [])
+                
+                # Parse JSON if outcomes is a string (API may return as JSON string)
+                if isinstance(outcomes, str):
+                    import json
+                    try:
+                        outcomes = json.loads(outcomes)
+                    except (json.JSONDecodeError, ValueError):
+                        # If parsing fails, try splitting by comma
+                        outcomes = [o.strip() for o in outcomes.split(',') if o.strip()]
+                
+                # Ensure it's a list
+                if not isinstance(outcomes, list):
+                    outcomes = []
+                
                 if not outcomes or len(outcomes) < 2:
                     skipped += 1
                     continue
@@ -1423,131 +1420,61 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                 parent_question = market.get('question', 'Unknown')
                 market_slug = market.get('slug', '')
                 
-                # FORCE LOG CARDANO - DEBUG
-                is_cardano = 'cardano' in parent_question.lower() and 'etf' in parent_question.lower()
-                if is_cardano:
-                    logger.info(f"\n{'='*80}")
-                    logger.info(f"🔍 CARDANO ETF DETECTED IN FEED")
-                    logger.info(f"   Question: {parent_question}")
-                    logger.info(f"   Slug: {market_slug}")
-                    logger.info(f"   Raw outcomes: {market.get('outcomes')}")
-                    logger.info(f"   Raw outcomePrices: {market.get('outcomePrices')}")
-                    logger.info(f"{'='*80}\n")
-                
-                # Construct URL - Polymarket uses /market/ path with slug
-                # This works for both binary and multi-outcome markets
+                # Construct market URL
                 market_url = f"https://polymarket.com/market/{market_slug}"
                 
-                # Determine if binary market (Yes/No) or multi-outcome
-                is_binary = len(outcomes) == 2 and all(
-                    o.lower() in ['yes', 'no'] for o in outcomes
-                )
+                # Determine market type: Binary (Yes/No) or Multi-outcome
+                is_binary = len(outcomes) == 2 and all(o.lower() in ['yes', 'no'] for o in outcomes)
                 
-                # Debug: Log binary detection for Cardano
-                if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                    logger.info(f"🔍 CARDANO BINARY CHECK: outcomes={outcomes}, len={len(outcomes)}, is_binary={is_binary}")
-                    logger.info(f"   Outcome checks: [{', '.join([f'{o!r}.lower()={o.lower()!r} in [yes,no]? {o.lower() in ['yes', 'no']}' for o in outcomes])}]")
+                # Get outcome prices
+                outcome_prices = market.get('outcomePrices', [])
+                if isinstance(outcome_prices, str):
+                    import json
+                    outcome_prices = json.loads(outcome_prices)
                 
-                # For binary markets, ONLY process YES (index 0) - industry standard
-                # For multi-outcome markets, process ALL outcomes
-                outcome_indices = [0] if is_binary else range(len(outcomes))
+                if not outcome_prices or len(outcome_prices) != len(outcomes):
+                    skipped += 1
+                    continue
                 
-                # Debug: Log what we'll process
-                if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                    logger.info(f"   Will process outcome indices: {list(outcome_indices)}")
+                # =================================================================
+                # OUTCOME PROCESSING
+                # Binary: Process once using YES probability to determine direction
+                # Multi-outcome: Process each outcome as separate market
+                # =================================================================
                 
-                # Process EACH outcome as a separate opportunity
+                if is_binary:
+                    # Binary market: Single processing using YES price
+                    outcome_indices = [0]  # Only process YES once
+                else:
+                    # Multi-outcome: Process all outcomes
+                    outcome_indices = range(len(outcomes))
+                
+                # Process each outcome
                 for outcome_idx in outcome_indices:
-                    # DEBUG CARDANO: Log which index we're processing
-                    if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                        logger.info(f"🔄 PROCESSING LOOP: outcome_idx={outcome_idx}, is_binary={is_binary}")
-                        logger.info(f"   outcome_indices list was: {list(outcome_indices)}")
-                    
-                    if outcome_idx >= len(outcomes):
-                        continue
                     outcome_name = outcomes[outcome_idx]
-                    # Extract price for this specific outcome
-                    try:
-                        # For binary markets, outcomes = ['Yes', 'No']
-                        # For multi-outcome, each outcome has its own price
-                        
-                        # Get outcomePrices array (one price per outcome)
-                        outcome_prices = market.get('outcomePrices', [])
-                        if isinstance(outcome_prices, str):
-                            import json
-                            outcome_prices = json.loads(outcome_prices)
-                        
-                        if outcome_idx >= len(outcome_prices):
-                            continue
-                        
-                        yes_price = float(outcome_prices[outcome_idx])
-                        
-                        # DEBUG CARDANO: Verify the price we just extracted
-                        if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                            logger.info(f"💰 PRICE EXTRACTED:")
-                            logger.info(f"   outcome_prices array: {outcome_prices}")
-                            logger.info(f"   outcome_idx: {outcome_idx}")
-                            logger.info(f"   outcome_name: {outcome_name!r}")
-                            logger.info(f"   yes_price = outcome_prices[{outcome_idx}] = {yes_price}")
-                            logger.info(f"   This should be ~0.059 for YES!")
-                        
-                        # CRITICAL: For binary markets, outcome_idx MUST be 0 (YES)
-                        # If we're here with outcome_idx=1 for a binary market, something is WRONG
-                        if is_binary and outcome_idx != 0:
-                            logger.error(f"❌ CRITICAL BUG: Binary market {parent_question} processing outcome_idx={outcome_idx} (should be 0)")
-                            logger.error(f"   This should NEVER happen! Skipping...")
-                            continue
-                        
-                        # Debug logging for first few markets (if enabled)
-                        if enable_debug_logging and debug_count < max_debug_logs:
-                            logger.info(f"DEBUG: Market '{parent_question[:60]}' | Type: {'BINARY' if is_binary else 'MULTI'} | Outcomes: {outcomes} | Prices: {outcome_prices}")
-                            logger.info(f"  -> Processing outcome_idx={outcome_idx} ({outcome_name}), price={yes_price:.4f}")
-                            debug_count += 1
-                        
-                        # Debug: Always log Cardano
-                        if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                            logger.info(f"🎯 CARDANO PRICE EXTRACTION:")
-                            logger.info(f"   outcome_idx={outcome_idx}, outcome_name={outcome_name!r}")
-                            logger.info(f"   outcome_prices={outcome_prices}")
-                            logger.info(f"   yes_price = outcome_prices[{outcome_idx}] = {yes_price:.6f} ({yes_price*100:.2f}%)")
-                        
-                        # For multi-outcome markets, bid/ask might not be available per outcome
-                        # Use the market-level bid/ask for binary, or estimate from price
-                        best_bid = market.get('bestBid')
-                        best_ask = market.get('bestAsk')
-                        
-                        # For multi-outcome, approximate bid/ask from price
-                        if len(outcomes) > 2:
-                            # Estimate spread as 1-2% of price
-                            spread_estimate = max(0.01, yes_price * 0.02)
-                            best_bid = max(0.001, yes_price - spread_estimate / 2)
-                            best_ask = min(0.999, yes_price + spread_estimate / 2)
-                        else:
-                            # Binary market - always use YES side bid/ask (outcome_idx=0)
-                            if best_bid is not None:
-                                best_bid = float(best_bid)
-                            if best_ask is not None:
-                                best_ask = float(best_ask)
-                        
-                        # Fallback if no bid/ask
-                        if best_bid is None:
-                            best_bid = max(0.001, yes_price - 0.01)
-                        if best_ask is None:
-                            best_ask = min(0.999, yes_price + 0.01)
-                        
-                        processed += 1
-                    except (ValueError, TypeError, AttributeError, IndexError) as e:
-                        skipped += 1
-                        continue
-                
-                    # Get basic data needed for all processing
+                    yes_price = float(outcome_prices[outcome_idx])
+                    
+                    # Get bid/ask prices
+                    if is_binary:
+                        # Binary: Use market bid/ask (for YES side)
+                        best_bid = float(market.get('bestBid', yes_price - 0.01))
+                        best_ask = float(market.get('bestAsk', yes_price + 0.01))
+                    else:
+                        # Multi-outcome: Estimate from price
+                        spread = max(0.01, yes_price * 0.02)
+                        best_bid = max(0.001, yes_price - spread / 2)
+                        best_ask = min(0.999, yes_price + spread / 2)
+                    
+                    # Get expiry and volume data
                     end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
                     try:
                         end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
-                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                    except:
+                    except (ValueError, AttributeError):
                         end_dt = now
-                        hours_to_expiry = 0
+                    
+                    hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
+                        continue
                     
                     volume = float(market.get('volume') or 0)
                     
@@ -1561,158 +1488,133 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     else:
                         directional_momentum = one_week_change
                     
-                    # Determine direction based on YES price
-                    # For binary markets, we're always looking at YES (index 0)
-                    # Direction indicates the trading opportunity: YES if bullish, NO if bearish
-                    direction = 'YES' if yes_price >= 0.5 else 'NO'
+                    # =================================================================
+                    # SIMPLE DIRECTION LOGIC (User's Request)
+                    # Binary: <25% = NO, >75% = YES (with momentum)
+                    # Multi-outcome: Treat each as separate market with own probability
+                    # =================================================================
                     
-                    # Debug mode: skip all qualification filters
-                    if debug_mode:
-                        # Calculate composite momentum
-                        momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
-                        momentum = momentum_data['signal_strength']
-                        
-                        # Filter by minimum momentum even in debug mode
-                        if momentum < min_momentum:
-                            continue
-                        # Filter by minimum momentum even in debug mode
-                        if momentum < min_momentum:
-                            continue
-                        
-                        # Calculate annualized yield
-                        if direction == 'YES':
-                            entry_price = best_ask if best_ask is not None else yes_price
-                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                    # For binary markets: determine YES or NO based on probability
+                    # For multi-outcome: each outcome is its own opportunity
+                    if is_binary:
+                        if yes_price > 0.75:
+                            direction = 'YES'
+                        elif yes_price < 0.25:
+                            direction = 'NO'
                         else:
-                            entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
-                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
-                        
-                        days_in_year = 365
-                        days_to_expiry = hours_to_expiry / 24
-                        if days_to_expiry > 0:
-                            annualized_yield = ((1 + profit_if_win) ** (days_in_year / days_to_expiry)) - 1
-                        else:
-                            annualized_yield = 0
-                        
-                        # Calculate score
-                        score_data = calculate_opportunity_score(
-                            current_prob=yes_price,
-                            momentum=momentum,
-                            hours_to_expiry=hours_to_expiry,
-                            volume=volume,
-                            best_bid=best_bid,
-                            best_ask=best_ask,
-                            direction=direction,
-                            one_day_change=one_day_change,
-                            one_week_change=one_week_change
-                        )
-                        
-                        # Format display question
-                        should_show_bracket = (
-                            not is_binary and
-                            len(outcomes) > 2 and 
-                            outcome_name and 
-                            len(outcome_name) > 3 and
-                            outcome_name.lower() not in ['yes', 'no']
-                        )
-                        
-                        display_question = f"{parent_question} [{outcome_name}]" if should_show_bracket else parent_question
-                        
-                        # Validate and append
-                        if is_binary and yes_price > 0.9:
-                            logger.error(f"❌ DEBUG MODE VALIDATION: Binary {parent_question} has yes_price={yes_price:.4f} - SKIPPING")
-                            continue
-                        
-                        # DEBUG: Log Cardano before appending
-                        if is_cardano:
-                            logger.info(f"📝 DEBUG MODE - About to append Cardano:")
-                            logger.info(f"   yes_price={yes_price:.6f}, direction={direction}, best_bid={best_bid:.6f}, best_ask={best_ask:.6f}")
-                        
-                        opportunities.append({
-                            'question': display_question,
-                            'slug': market_slug,
-                            'url': market_url,
-                            'current_prob': yes_price,
-                            'hours_to_expiry': hours_to_expiry,
-                            'end_date': end_dt,
-                            'volume_24h': volume,
-                            'momentum': momentum,
-                            'score': score_data['total_score'],
-                            'grade': score_data['grade'],
-                            'direction': direction,
-                            'annualized_yield': annualized_yield,
-                            'best_bid': best_bid,
-                            'best_ask': best_ask
-                        })
-                        continue  # Skip normal filtering when in debug mode
+                            continue  # Skip middle zone
+                    else:
+                        # Multi-outcome: treat as YES for this outcome
+                        direction = 'YES'
                     
-                    # NORMAL MODE: Apply all qualification filters
-                    # Check if extreme (0 to X% or (100-X) to 100%)
-                    # We're always looking at YES price since outcome_idx=0 for binary markets
-                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme (e.g., >85%)
-                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme (e.g., <15%)
-                    
-                    # Filter: HIGH probability (YES) needs positive momentum, LOW probability (NO) needs negative
-                    # This ensures we're catching pullbacks and momentum continuations
-                    if is_extreme_yes and directional_momentum <= 0:
-                        continue  # Skip - high probability markets need rising prices
-                    if is_extreme_no and directional_momentum >= 0:
-                        continue  # Skip - low probability markets need falling prices (pullback)
-                    
-                    # Calculate composite momentum using advanced algorithm
+                    # Calculate composite momentum
                     momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
-                    momentum = momentum_data['signal_strength']  # 0-1 scale
+                    momentum = momentum_data['signal_strength']
                     
-                    # Filter by minimum momentum
+                    # Require minimum momentum
                     if momentum < min_momentum:
                         continue
                     
-                    has_high_momentum = momentum >= 0.25  # 25% composite signal strength
+                    # Calculate annualized yield
+                    if direction == 'YES':
+                        entry_price = best_ask
+                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                    else:  # NO
+                        entry_price = 1.0 - best_bid
+                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
                     
-                    # Get expiration
-                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
-                    if not end_date:
-                        continue
+                    days_to_expiry = hours_to_expiry / 24
                     
-                    try:
-                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                    except:
-                        continue
+                    # Calculate APY with overflow protection
+                    if days_to_expiry > 0.1:
+                        exponent = 365 / days_to_expiry
+                        if exponent > 1000:
+                            annualized_yield = 0
+                        else:
+                            try:
+                                annualized_yield = ((1 + profit_if_win) ** exponent) - 1
+                                if annualized_yield > 100:
+                                    annualized_yield = 100
+                            except (OverflowError, ValueError):
+                                annualized_yield = 0
+                    else:
+                        annualized_yield = 0
                     
-                    # Qualify if: extreme OR (high momentum AND somewhat extreme >60%/<40%)
-                    is_somewhat_extreme = yes_price >= 0.60 or yes_price <= 0.40
-                    qualifies = (is_extreme_yes or is_extreme_no) or (has_high_momentum and is_somewhat_extreme)
+                    # Calculate score
+                    score_data = calculate_opportunity_score(
+                        current_prob=yes_price,
+                        momentum=momentum,
+                        hours_to_expiry=hours_to_expiry,
+                        volume=volume,
+                        best_bid=best_bid,
+                        best_ask=best_ask,
+                        direction=direction,
+                        one_day_change=one_day_change,
+                        one_week_change=one_week_change
+                    )
                     
-                    if not qualifies:
-                        continue
+                    # Format display question
+                    if is_binary:
+                        display_question = parent_question
+                    else:
+                        display_question = f"{parent_question} [{outcome_name}]"
                     
-                    # Apply user's expiry filter as hard cap
-                    if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
-                        continue
+                    # Add to opportunities
+                    opportunities.append({
+                        'question': display_question,
+                        'slug': market_slug,
+                        'url': market_url,
+                        'current_prob': yes_price,
+                        'hours_to_expiry': hours_to_expiry,
+                        'end_date': end_dt,
+                        'volume_24h': volume,
+                        'momentum': momentum,
+                        'score': score_data['total_score'],
+                        'grade': score_data['grade'],
+                        'direction': direction,
+                        'annualized_yield': annualized_yield,
+                        'best_bid': best_bid,
+                        'best_ask': best_ask
+                    })
                     
                     # Get volume
                     volume = float(market.get('volume') or 0)
                     
-                    # Determine direction
-                    direction = 'YES' if is_extreme_yes else 'NO'
+                    # Direction already determined above based on probability threshold
+                    # YES if yes_price >= 0.75, NO if yes_price <= 0.25
                     
                     # Calculate annualized yield using ask/bid prices
-                    
-                    # For YES: buy at bestAsk (asking price for YES tokens)
-                    # For NO: buy NO tokens, which means selling YES at bestBid
-                    if direction == 'YES':
+                    if is_binary:
+                        # Binary: For YES buy at ask, for NO sell YES at bid
+                        if direction == 'YES':
+                            entry_price = best_ask if best_ask is not None else yes_price
+                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                        else:
+                            # NO direction: entry price is (1 - bestBid) for YES
+                            entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
+                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+                    else:
+                        # Multi-outcome: buy this specific outcome at ask price
                         entry_price = best_ask if best_ask is not None else yes_price
                         profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-                    else:
-                        # NO direction: entry price is (1 - bestBid) for YES
-                        entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
-                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
                     
                     days_in_year = 365
-                    days_to_expiry = hours_to_expiry / 24
-                    if days_to_expiry > 0:
-                        annualized_yield = ((1 + profit_if_win) ** (days_in_year / days_to_expiry)) - 1
+                    days_to_expiry = hours_to_expiry / 24 if hours_to_expiry > 0 else 0
+                    
+                    # Calculate APY with overflow protection
+                    if days_to_expiry > 0.1:  # At least 2.4 hours
+                        exponent = days_in_year / days_to_expiry
+                        # Cap exponent to prevent overflow (max 1000x annualization)
+                        if exponent > 1000:
+                            annualized_yield = 0  # Too short timeframe, not meaningful
+                        else:
+                            try:
+                                annualized_yield = ((1 + profit_if_win) ** exponent) - 1
+                                # Cap at 10000% (100x) to prevent display issues
+                                if annualized_yield > 100:
+                                    annualized_yield = 100
+                            except (OverflowError, ValueError):
+                                annualized_yield = 0
                     else:
                         annualized_yield = 0
                     
@@ -1730,87 +1632,55 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     )
                     
                     # Format question with outcome name for multi-outcome markets
-                    # For binary markets, never show brackets (we only process YES)
-                    # For multi-outcome markets (3+), show outcome name in brackets
-                    should_show_bracket = (
-                        not is_binary and
-                        len(outcomes) > 2 and 
-                        outcome_name and 
-                        len(outcome_name) > 3 and
-                        outcome_name.lower() not in ['yes', 'no']
-                    )
-                    
-                    if should_show_bracket:
-                        display_question = f"{parent_question} [{outcome_name}]"
-                    else:
+                    # Binary markets (Yes/No): No brackets
+                    # Multi-outcome markets: ALWAYS show [outcome] brackets
+                    if is_binary:
                         display_question = parent_question
+                    else:
+                        # Multi-outcome: Always show outcome in brackets
+                        display_question = f"{parent_question} [{outcome_name}]"
                     
                     # VALIDATION: For binary markets, current_prob should be YES price (index 0)
                     # If is_binary and yes_price > 0.5, that's suspicious (most extreme markets are <15% or >85%)
-                    # If is_binary and yes_price is close to 0.94, we're likely using the NO price by mistake!
-                    if is_binary and yes_price > 0.9:
-                        logger.error(f"❌ NORMAL MODE VALIDATION FAILED: Binary market '{parent_question}' has yes_price={yes_price:.4f}")
-                        logger.error(f"   This looks like the NO price! Should be ~{1.0-yes_price:.4f} instead.")
-                        logger.error(f"   outcome_idx={outcome_idx}, outcomes={outcomes}, prices={outcome_prices}")
-                        # DO NOT add this opportunity - it's corrupted
-                        continue
-                    
-                    # DEBUG: Log Cardano before appending
-                    if is_cardano:
-                        logger.info(f"📝 NORMAL MODE - About to append Cardano:")
-                        logger.info(f"   yes_price={yes_price:.6f}, direction={direction}, best_bid={best_bid:.6f}, best_ask={best_ask:.6f}")
-                    
                     opportunities.append({
                         'question': display_question,
                         'slug': market_slug,
                         'url': market_url,
-                        'current_prob': yes_price,  # Always YES price (0-1)
+                        'current_prob': yes_price,
                         'hours_to_expiry': hours_to_expiry,
                         'end_date': end_dt,
                         'volume_24h': volume,
                         'momentum': momentum,
                         'score': score_data['total_score'],
                         'grade': score_data['grade'],
-                        'direction': direction,  # YES or NO (trading direction)
+                        'direction': direction,
                         'annualized_yield': annualized_yield,
                         'best_bid': best_bid,
                         'best_ask': best_ask
                     })
-                    
-                    # Debug: Log Cardano specifically
-                    if 'cardano' in parent_question.lower() and 'etf' in parent_question.lower():
-                        logger.info(f"✅ CARDANO ETF OPPORTUNITY CREATED:")
-                        logger.info(f"   question: {display_question}")
-                        logger.info(f"   current_prob (YES price): {yes_price:.4f} ({yes_price*100:.1f}%)")
-                        logger.info(f"   direction: {direction}")
-                        logger.info(f"   outcome_idx processed: {outcome_idx} ({outcome_name})")
-                        logger.info(f"   is_binary: {is_binary}")
-                        logger.info(f"   EXPECTED DISPLAY: Prob={yes_price*100:.1f}%, Dir={direction}")
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
+            
+            # DEBUG: Check for duplicates and deduplicate
+            seen_keys = set()
+            unique_opportunities = []
+            duplicate_count = 0
+            
+            for opp in opportunities:
+                # Create unique key from slug + direction + prob
+                key = (opp['slug'], opp['direction'], round(opp['current_prob'], 4))
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    unique_opportunities.append(opp)
+                else:
+                    duplicate_count += 1
+                    logger.warning(f"DUPLICATE: {opp['question'][:50]}")
+            
+            if duplicate_count > 0:
+                logger.error(f"❌ Removed {duplicate_count} duplicates ({len(opportunities)} -> {len(unique_opportunities)})")
+                opportunities = unique_opportunities
+            
             logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
-            
-            # FINAL SAFETY CHECK: Remove any binary markets with probability > 0.9
-            # This catches any data that slipped through validation
-            before_count = len(opportunities)
-            opportunities = [
-                opp for opp in opportunities 
-                if not (opp['current_prob'] > 0.9 and 'cardano' in opp['question'].lower())
-            ]
-            after_count = len(opportunities)
-            
-            if before_count > after_count:
-                logger.warning(f"⚠️ FINAL SAFETY: Removed {before_count - after_count} corrupted opportunities (prob > 0.9)")
-                for opp in opportunities:
-                    if 'cardano' in opp['question'].lower():
-                        logger.info(f"   Kept Cardano with prob={opp['current_prob']:.4f}")
-            
-            # Log sample opportunities for validation (configurable)
-            if opportunities and enable_debug_logging:
-                logger.info("Sample opportunities (top 3):")
-                for i, opp in enumerate(opportunities[:3], 1):
-                    logger.info(f"  {i}. {opp['question'][:60]} | Prob: {opp['current_prob']:.1%} | Dir: {opp['direction']} | Mom: {opp['momentum']:+.1%} | Score: {opp['score']:.1f}")
-            
             return opportunities
     
     return asyncio.run(fetch())
@@ -1886,11 +1756,10 @@ def display_pullback_table(opportunities: List[Dict]):
         question = opp['question'][:65] + "..." if len(opp['question']) > 65 else opp['question']
         url = opp['url']
         
-        # Probability - ALWAYS show YES probability (0-1), never flip
-        # current_prob is ALWAYS the YES price from outcome_prices[0] for binary markets
-        prob = opp['current_prob']  # This is YES price (e.g., 0.059 for Cardano = 5.9%)
+        # Probability - ALWAYS show YES probability (0-1)
+        prob = opp['current_prob']
         prob_class = "prob-yes" if prob > 0.5 else "prob-no"
-        prob_str = f"{prob:.1%}"  # Display as percentage (5.9%)
+        prob_str = f"{prob:.1%}"
         
         # Direction
         direction = "YES" if opp['direction'] == "YES" else "NO"
