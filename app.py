@@ -1831,6 +1831,53 @@ def display_pullback_table(opportunities: List[Dict]):
 # ARBITRAGE SCANNER STRATEGY
 # ============================================================================
 
+def detect_non_exclusive_outcomes(outcomes: List[str], question: str) -> bool:
+    """
+    Detect if outcomes might NOT be mutually exclusive.
+    
+    Examples of non-exclusive patterns:
+    - ">2%" and ">3%" (if 3.5%, both win)
+    - "Over 100" and "Over 200" (if 250, both win)
+    - "At least 50%" and "At least 75%" (if 80%, both win)
+    
+    Returns True if market appears to have non-exclusive outcomes.
+    """
+    if len(outcomes) < 2:
+        return False
+    
+    # Keywords that suggest range/threshold markets
+    range_keywords = [
+        'over', 'under', 'above', 'below', 'more than', 'less than',
+        'at least', 'at most', 'greater', 'higher', 'lower', 'exceed',
+        '>', '<', '≥', '≤', 'minimum', 'maximum'
+    ]
+    
+    # Check if multiple outcomes contain range keywords
+    outcomes_with_ranges = 0
+    for outcome in outcomes:
+        outcome_lower = outcome.lower()
+        if any(keyword in outcome_lower for keyword in range_keywords):
+            outcomes_with_ranges += 1
+    
+    # If 2+ outcomes have range keywords, likely non-exclusive
+    if outcomes_with_ranges >= 2:
+        return True
+    
+    # Check for percentage/number patterns that suggest ranges
+    import re
+    number_patterns = []
+    for outcome in outcomes:
+        # Look for patterns like ">2%", "Over 100", "<50"
+        if re.search(r'[><≥≤]\s*\d+', outcome):
+            number_patterns.append(outcome)
+    
+    # If 2+ outcomes have comparison operators with numbers, likely non-exclusive
+    if len(number_patterns) >= 2:
+        return True
+    
+    return False
+
+
 def calculate_arbitrage_opportunities(
     outcomes: List[str], 
     outcome_prices: List[float],
@@ -1867,6 +1914,9 @@ def calculate_arbitrage_opportunities(
     
     if n < 2 or len(outcome_prices) < n:
         return {'opportunities': [], 'best_opportunity': None}
+    
+    # Check for non-mutually exclusive outcomes
+    non_exclusive = detect_non_exclusive_outcomes(outcomes, '')
     
     # Ensure we have proper bid/ask arrays
     if len(best_bids) < n:
@@ -2058,7 +2108,8 @@ def calculate_arbitrage_opportunities(
         'overround_mid': (sum(outcome_prices) - 1.0) * 100,
         'has_arbitrage': len(profitable) > 0,
         'max_profit': best_opportunity['profit'] if best_opportunity else 0,
-        'max_profit_pct': best_opportunity['profit_pct'] if best_opportunity else 0
+        'max_profit_pct': best_opportunity['profit_pct'] if best_opportunity else 0,
+        'non_exclusive_warning': non_exclusive
     }
 
 
@@ -2141,7 +2192,20 @@ def scan_arbitrage_markets(min_outcomes: int = 2, limit: int = 500,
             
             for market in markets:
                 try:
+                    # Parse outcomes - may be JSON string or list
                     outcomes = market.get('outcomes', [])
+                    if isinstance(outcomes, str):
+                        import json
+                        try:
+                            outcomes = json.loads(outcomes)
+                        except:
+                            # If JSON parsing fails, might be comma-separated
+                            outcomes = [o.strip() for o in outcomes.split(',') if o.strip()]
+                    
+                    # Ensure it's a list
+                    if not isinstance(outcomes, list):
+                        outcomes = []
+                    
                     n = len(outcomes)
                     
                     # Debug first few failures
@@ -2266,7 +2330,8 @@ def scan_arbitrage_markets(min_outcomes: int = 2, limit: int = 500,
                         'bid_sum': arb_result['total_bid_sum'],
                         'ask_sum': arb_result['total_ask_sum'],
                         'mid_sum': arb_result['mid_sum'],
-                        'overround_mid': arb_result['overround_mid']
+                        'overround_mid': arb_result['overround_mid'],
+                        'non_exclusive_warning': arb_result.get('non_exclusive_warning', False)
                     })
                     
                 except Exception as e:
@@ -2323,13 +2388,13 @@ def render_arbitrage_scanner():
         min_profit_idx = st.select_slider(
             "Min Profit ($)",
             options=range(len(profit_steps)),
-            value=1,  # Default to $10 (index 1)
+            value=0,  # Default to $1 (index 0)
             format_func=lambda i: f"${profit_steps[i]}",
             help="Minimum absolute profit in dollars"
         )
         min_profit = profit_steps[min_profit_idx]
         
-        limit = st.number_input("Max Markets", 50, 2000, 500)
+        limit = st.number_input("Max Markets", 50, 5000, 1000)
         
         st.markdown("---")
         
@@ -2356,6 +2421,18 @@ def render_arbitrage_scanner():
         ✓ All others = $0  
         ✓ P&L calculated for ALL scenarios  
         ✓ Only guaranteed profits shown
+        """)
+        
+        st.markdown("---")
+        st.warning("""
+        **⚠️ Important:** This scanner assumes **mutually exclusive** outcomes (only ONE can win).
+        
+        **Does NOT work for:**
+        - Range markets (e.g., ">2%" AND ">3%")
+        - Overlapping thresholds
+        - Non-exclusive conditions
+        
+        Markets flagged with ⚠️ may have multiple winners.
         """)
     
     # Scan controls
@@ -2414,7 +2491,7 @@ def render_arbitrage_scanner():
     # Display results
     if 'arb_results' in st.session_state:
         results = st.session_state['arb_results']
-        min_profit_filter = st.session_state.get('arb_min_profit', 10)
+        min_profit_filter = st.session_state.get('arb_min_profit', 1)
         
         if results:
             display_arbitrage_results(results, debug_mode, min_profit_filter)
@@ -2426,7 +2503,7 @@ def render_arbitrage_scanner():
                 st.caption("Enable 'Debug Mode' to see all markets and understand pricing.")
 
 
-def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit: float = 10):
+def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit: float = 1):
     """Display arbitrage analysis results."""
     
     # Check for filter stats and display them in debug mode
@@ -2535,6 +2612,11 @@ def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit:
     
     for r in results[:100]:
         q = r['question'][:50] + "..." if len(r['question']) > 50 else r['question']
+        
+        # Add warning icon if non-exclusive
+        if r.get('non_exclusive_warning', False):
+            q = "⚠️ " + q
+        
         url = r['url']
         
         n = r['n_outcomes']
@@ -2590,6 +2672,10 @@ def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit:
             best = arb['best_opportunity']
             
             with st.expander(f"#{i} {r['question'][:60]}... → +{r['max_profit_pct']:.3f}%"):
+                # Warning for non-exclusive outcomes
+                if r.get('non_exclusive_warning', False):
+                    st.error("⚠️ **WARNING:** This market may have NON-MUTUALLY EXCLUSIVE outcomes. Multiple outcomes could resolve to YES, invalidating arbitrage math. Verify manually!")
+                
                 # Market info
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -2614,9 +2700,10 @@ def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit:
                 st.markdown("**Execution:**")
                 exec_df = []
                 for step in best['execution']:
+                    outcome_name = str(step['outcome']) if step['outcome'] else 'Unknown'
                     exec_df.append({
                         'Action': step['side'],
-                        'Outcome': step['outcome'],
+                        'Outcome': outcome_name,
                         'Price': f"${step['price']:.4f}"
                     })
                 st.dataframe(exec_df, use_container_width=True, hide_index=True)
@@ -2643,8 +2730,9 @@ def display_arbitrage_results(results: List[Dict], debug_mode: bool, min_profit:
                 for j, (name, price, bid, ask) in enumerate(zip(
                     r['outcomes'], r['outcome_prices'], r['best_bids'], r['best_asks']
                 )):
+                    outcome_name = str(name) if name else f'Outcome {j+1}'
                     outcome_data.append({
-                        'Outcome': name,
+                        'Outcome': outcome_name,
                         'Mid': f"{price:.2%}",
                         'Bid': f"{bid:.4f}",
                         'Ask': f"{ask:.4f}",
