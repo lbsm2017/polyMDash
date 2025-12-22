@@ -1139,9 +1139,8 @@ def calculate_opportunity_score(
 def render_pullback_hunter():
     """Render the Pullback Hunter dashboard page."""
     
-    # Compact header
-    st.markdown("## 🎯 Momentum Hunter")
-    st.caption("Markets with strong momentum toward 100% or 0%, combining extremity and price movement")
+    # Compact header with minimal padding
+    st.markdown('<h2 style="margin-top: -1rem; margin-bottom: 0.3rem; padding-top: 0;">🎯 Momentum Hunter</h2>', unsafe_allow_html=True)
     
     # Move all controls to sidebar
     with st.sidebar:
@@ -1198,13 +1197,44 @@ def render_pullback_hunter():
         
         st.caption("💡 Qualifies if extreme (>75%/<25%) OR high momentum (≥30%) with >60%/<40% probability")
     
-    # Scan button - prominent
-    if st.button("🔍 Scan Markets", type="primary", use_container_width=True):
+    # Scan button, sort dropdown, and stats in one row
+    col_scan, col_sort, col_stats = st.columns([1.5, 2, 2])
+    
+    with col_scan:
+        scan_clicked = st.button("🔍 Scan Markets", type="primary", use_container_width=True)
+    
+    with col_sort:
+        # Sort dropdown (only shown when there are opportunities)
+        if 'opportunities' in st.session_state and st.session_state['opportunities']:
+            sort_method = st.selectbox(
+                "Sort by:",
+                ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
+                 "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
+                index=0,
+                label_visibility="collapsed"
+            )
+            st.session_state['sort_method'] = sort_method
+    
+    with col_stats:
+        # Display results status in the same row
+        if 'opportunities' in st.session_state:
+            opportunities = st.session_state['opportunities']
+            scan_time = st.session_state.get('scan_time', datetime.now())
+            st.markdown(
+                f'<div style="padding: 0.4rem 0.75rem; background-color: #d4edda; color: #155724; '
+                f'border-radius: 0.25rem; margin-top: 0.15rem;">'
+                f'✅ Found {len(opportunities)} opportunities (scanned at {scan_time.strftime("%H:%M:%S")})</div>',
+                unsafe_allow_html=True
+            )
+    
+    # Handle scan button click
+    if scan_clicked:
         with st.spinner("Scanning markets..."):
             try:
                 opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum)
                 st.session_state['opportunities'] = opportunities
                 st.session_state['scan_time'] = datetime.now()
+                st.rerun()
             except Exception as e:
                 logger.error(f"Scan error: {e}", exc_info=True)
                 st.error(f"Error: {str(e)}")
@@ -1212,19 +1242,14 @@ def render_pullback_hunter():
                 st.code(traceback.format_exc())
                 return
     
-    # Display results
+    # Display results table
     if 'opportunities' in st.session_state:
         opportunities = st.session_state['opportunities']
-        scan_time = st.session_state.get('scan_time', datetime.now())
-        
-        st.success(f"Found {len(opportunities)} opportunities (scanned at {scan_time.strftime('%H:%M:%S')})", icon="✅")
         
         if opportunities:
             display_pullback_table(opportunities)
         else:
             st.warning("No opportunities found. Try adjusting filters.")
-    else:
-        st.info("👆 Click 'Scan Markets' to start")
 
 
 def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15) -> List[Dict]:
@@ -1321,48 +1346,174 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             skipped = 0
             
             for market in filtered:
-                # Get price from lastTradePrice field
+                # Get outcomes - handle multi-outcome events
                 outcomes = market.get('outcomes', [])
                 if not outcomes or len(outcomes) < 2:
                     skipped += 1
                     continue
                 
-                # Extract price from lastTradePrice (or bestBid/bestAsk as fallback)
-                try:
-                    yes_price = market.get('lastTradePrice')
-                    best_bid = market.get('bestBid')
-                    best_ask = market.get('bestAsk')
-                    
-                    # If no lastTradePrice, try bestBid/bestAsk average (0% is valid probability)
-                    if yes_price is None:
-                        if best_bid is not None and best_ask is not None:
-                            yes_price = (float(best_bid) + float(best_ask)) / 2
-                        else:
-                            skipped += 1
-                            continue
-                    
-                    yes_price = float(yes_price)
-                    if best_bid is not None:
-                        best_bid = float(best_bid)
-                    if best_ask is not None:
-                        best_ask = float(best_ask)
-                    processed += 1
-                except (ValueError, TypeError, AttributeError):
-                    skipped += 1
-                    continue
+                # Get parent question for multi-outcome markets
+                parent_question = market.get('question', 'Unknown')
+                market_slug = market.get('slug', '')
                 
-                # Debug mode: skip all filters
-                if debug_mode:
-                    # Get basic data for display
-                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+                # Process EACH outcome as a separate opportunity
+                for outcome_idx, outcome_name in enumerate(outcomes):
+                    # Extract price for this specific outcome
                     try:
-                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
-                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                    except:
-                        end_dt = now
-                        hours_to_expiry = 0
-                    
-                    volume = float(market.get('volume') or 0)
+                        # For binary markets, outcomes = ['Yes', 'No']
+                        # For multi-outcome, each outcome has its own price
+                        
+                        # Get outcomePrices array (one price per outcome)
+                        outcome_prices = market.get('outcomePrices', [])
+                        if isinstance(outcome_prices, str):
+                            import json
+                            outcome_prices = json.loads(outcome_prices)
+                        
+                        if outcome_idx >= len(outcome_prices):
+                            continue
+                        
+                        yes_price = float(outcome_prices[outcome_idx])
+                        
+                        # For multi-outcome markets, bid/ask might not be available per outcome
+                        # Use the market-level bid/ask for binary, or estimate from price
+                        best_bid = market.get('bestBid')
+                        best_ask = market.get('bestAsk')
+                        
+                        # For multi-outcome, approximate bid/ask from price
+                        if len(outcomes) > 2:
+                            # Estimate spread as 1-2% of price
+                            spread_estimate = max(0.01, yes_price * 0.02)
+                            best_bid = max(0.001, yes_price - spread_estimate / 2)
+                            best_ask = min(0.999, yes_price + spread_estimate / 2)
+                        else:
+                            # Binary market - use actual bid/ask if available
+                            if outcome_idx == 0:  # YES side
+                                if best_bid is not None:
+                                    best_bid = float(best_bid)
+                                if best_ask is not None:
+                                    best_ask = float(best_ask)
+                            else:  # NO side (inverse)
+                                if best_bid is not None and best_ask is not None:
+                                    # Flip bid/ask for NO side
+                                    temp_bid = 1.0 - float(best_ask)
+                                    temp_ask = 1.0 - float(best_bid)
+                                    best_bid = temp_bid
+                                    best_ask = temp_ask
+                        
+                        # Fallback if no bid/ask
+                        if best_bid is None:
+                            best_bid = max(0.001, yes_price - 0.01)
+                        if best_ask is None:
+                            best_ask = min(0.999, yes_price + 0.01)
+                        
+                        processed += 1
+                    except (ValueError, TypeError, AttributeError, IndexError) as e:
+                        skipped += 1
+                        continue
+                
+                    # Debug mode: skip all filters
+                    if debug_mode:
+                        # Get basic data for display
+                        end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+                        try:
+                            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
+                            hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                        except:
+                            end_dt = now
+                            hours_to_expiry = 0
+                        
+                        volume = float(market.get('volume') or 0)
+                        
+                        # Get directional momentum (preserve sign)
+                        one_day_change = float(market.get('oneDayPriceChange') or 0)
+                        one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                        
+                        # Select momentum based on time window
+                        if momentum_window_hours <= 24:
+                            directional_momentum = one_day_change
+                        else:
+                            directional_momentum = one_week_change
+                        
+                        # Determine direction and check if momentum aligns
+                        direction = 'YES' if yes_price >= 0.5 else 'NO'
+                        
+                        # Filter: YES must have positive momentum, NO must have negative momentum
+                        if direction == 'YES' and directional_momentum <= 0:
+                            continue  # Skip - YES markets need rising prices
+                        if direction == 'NO' and directional_momentum >= 0:
+                            continue  # Skip - NO markets need falling prices
+                        
+                        # Calculate composite momentum using advanced algorithm
+                        momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
+                        momentum = momentum_data['signal_strength']  # 0-1 scale
+                        
+                        # Filter by minimum momentum
+                        if momentum < min_momentum:
+                            continue
+                        
+                        # Calculate annualized yield using ask/bid prices
+                        # For YES: buy at bestAsk (asking price for YES tokens)
+                        # For NO: buy NO tokens, which means selling YES at bestBid
+                        if direction == 'YES':
+                            entry_price = best_ask if best_ask is not None else yes_price
+                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                        else:
+                            # NO direction: entry price is (1 - bestBid) for YES
+                            entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
+                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+                        
+                        days_in_year = 365
+                        days_to_expiry = hours_to_expiry / 24
+                        if days_to_expiry > 0:
+                            annualized_yield = ((1 + profit_if_win) ** (days_in_year / days_to_expiry)) - 1
+                        else:
+                            annualized_yield = 0
+                        
+                        # Calculate advanced opportunity score
+                        score_data = calculate_opportunity_score(
+                            current_prob=yes_price,
+                            momentum=momentum,
+                            hours_to_expiry=hours_to_expiry,
+                            volume=volume,
+                            best_bid=best_bid,
+                            best_ask=best_ask,
+                            direction=direction,
+                            one_day_change=one_day_change,
+                            one_week_change=one_week_change
+                        )
+                        
+                        # Format question with outcome name for multi-outcome markets
+                        # Only show brackets for TRUE multi-outcome markets (3+ outcomes)
+                        # AND when outcome name is meaningful (not single char, not Yes/No)
+                        should_show_bracket = (
+                            len(outcomes) > 2 and 
+                            outcome_name and 
+                            len(outcome_name) > 3 and
+                            outcome_name.lower() not in ['yes', 'no']
+                        )
+                        
+                        if should_show_bracket:
+                            display_question = f"{parent_question} [{outcome_name}]"
+                        else:
+                            display_question = parent_question
+                        
+                        opportunities.append({
+                            'question': display_question,
+                            'slug': market_slug,
+                            'url': f"https://polymarket.com/event/{market_slug}",
+                            'current_prob': yes_price,
+                            'hours_to_expiry': hours_to_expiry,
+                            'end_date': end_dt,
+                            'volume_24h': volume,
+                            'momentum': momentum,
+                            'score': score_data['total_score'],
+                            'grade': score_data['grade'],
+                            'direction': direction,
+                            'annualized_yield': annualized_yield,
+                            'best_bid': best_bid,
+                            'best_ask': best_ask
+                        })
+                        continue
                     
                     # Get directional momentum (preserve sign)
                     one_day_change = float(market.get('oneDayPriceChange') or 0)
@@ -1374,13 +1525,14 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     else:
                         directional_momentum = one_week_change
                     
-                    # Determine direction and check if momentum aligns
-                    direction = 'YES' if yes_price >= 0.5 else 'NO'
+                    # Check if extreme (0 to X% or (100-X) to 100%)
+                    is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme
+                    is_extreme_no = yes_price <= min_extremity  # Bottom extreme
                     
                     # Filter: YES must have positive momentum, NO must have negative momentum
-                    if direction == 'YES' and directional_momentum <= 0:
+                    if is_extreme_yes and directional_momentum <= 0:
                         continue  # Skip - YES markets need rising prices
-                    if direction == 'NO' and directional_momentum >= 0:
+                    if is_extreme_no and directional_momentum >= 0:
                         continue  # Skip - NO markets need falling prices
                     
                     # Calculate composite momentum using advanced algorithm
@@ -1391,7 +1543,38 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     if momentum < min_momentum:
                         continue
                     
+                    has_high_momentum = momentum >= 0.25  # 25% composite signal strength
+                    
+                    # Get expiration
+                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+                    if not end_date:
+                        continue
+                    
+                    try:
+                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                        hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    except:
+                        continue
+                    
+                    # Qualify if: extreme OR (high momentum AND somewhat extreme >60%/<40%)
+                    is_somewhat_extreme = yes_price >= 0.60 or yes_price <= 0.40
+                    qualifies = (is_extreme_yes or is_extreme_no) or (has_high_momentum and is_somewhat_extreme)
+                    
+                    if not qualifies:
+                        continue
+                    
+                    # Apply user's expiry filter as hard cap
+                    if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
+                        continue
+                    
+                    # Get volume
+                    volume = float(market.get('volume') or 0)
+                    
+                    # Determine direction
+                    direction = 'YES' if is_extreme_yes else 'NO'
+                    
                     # Calculate annualized yield using ask/bid prices
+                    
                     # For YES: buy at bestAsk (asking price for YES tokens)
                     # For NO: buy NO tokens, which means selling YES at bestBid
                     if direction == 'YES':
@@ -1402,9 +1585,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
                         profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
                     
-                    hours_in_year = 8760
-                    if hours_to_expiry > 0:
-                        annualized_yield = ((1 + profit_if_win) ** (hours_in_year / hours_to_expiry)) - 1
+                    days_in_year = 365
+                    days_to_expiry = hours_to_expiry / 24
+                    if days_to_expiry > 0:
+                        annualized_yield = ((1 + profit_if_win) ** (days_in_year / days_to_expiry)) - 1
                     else:
                         annualized_yield = 0
                     
@@ -1421,10 +1605,25 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         one_week_change=one_week_change
                     )
                     
+                    # Format question with outcome name for multi-outcome markets
+                    # Only show brackets for TRUE multi-outcome markets (3+ outcomes)
+                    # AND when outcome name is meaningful (not single char, not Yes/No)
+                    should_show_bracket = (
+                        len(outcomes) > 2 and 
+                        outcome_name and 
+                        len(outcome_name) > 3 and
+                        outcome_name.lower() not in ['yes', 'no']
+                    )
+                    
+                    if should_show_bracket:
+                        display_question = f"{parent_question} [{outcome_name}]"
+                    else:
+                        display_question = parent_question
+                    
                     opportunities.append({
-                        'question': market.get('question', 'Unknown'),
-                        'slug': market.get('slug', ''),
-                        'url': f"https://polymarket.com/market/{market.get('slug', '')}",
+                        'question': display_question,
+                        'slug': market_slug,
+                        'url': f"https://polymarket.com/event/{market_slug}",
                         'current_prob': yes_price,
                         'hours_to_expiry': hours_to_expiry,
                         'end_date': end_dt,
@@ -1437,113 +1636,6 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'best_bid': best_bid,
                         'best_ask': best_ask
                     })
-                    continue
-                
-                # Get directional momentum (preserve sign)
-                one_day_change = float(market.get('oneDayPriceChange') or 0)
-                one_week_change = float(market.get('oneWeekPriceChange') or 0)
-                
-                # Select momentum based on time window
-                if momentum_window_hours <= 24:
-                    directional_momentum = one_day_change
-                else:
-                    directional_momentum = one_week_change
-                
-                # Check if extreme (0 to X% or (100-X) to 100%)
-                is_extreme_yes = yes_price >= (1.0 - min_extremity)  # Top extreme
-                is_extreme_no = yes_price <= min_extremity  # Bottom extreme
-                
-                # Filter: YES must have positive momentum, NO must have negative momentum
-                if is_extreme_yes and directional_momentum <= 0:
-                    continue  # Skip - YES markets need rising prices
-                if is_extreme_no and directional_momentum >= 0:
-                    continue  # Skip - NO markets need falling prices
-                
-                # Calculate composite momentum using advanced algorithm
-                momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
-                momentum = momentum_data['signal_strength']  # 0-1 scale
-                
-                # Filter by minimum momentum
-                if momentum < min_momentum:
-                    continue
-                
-                has_high_momentum = momentum >= 0.25  # 25% composite signal strength
-                
-                # Get expiration
-                end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
-                if not end_date:
-                    continue
-                
-                try:
-                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                    hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                except:
-                    continue
-                
-                # Qualify if: extreme OR (high momentum AND somewhat extreme >60%/<40%)
-                is_somewhat_extreme = yes_price >= 0.60 or yes_price <= 0.40
-                qualifies = (is_extreme_yes or is_extreme_no) or (has_high_momentum and is_somewhat_extreme)
-                
-                if not qualifies:
-                    continue
-                
-                # Apply user's expiry filter as hard cap
-                if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
-                    continue
-                
-                # Get volume
-                volume = float(market.get('volume') or 0)
-                
-                # Determine direction
-                direction = 'YES' if is_extreme_yes else 'NO'
-                
-                # Calculate annualized yield using ask/bid prices
-                
-                # For YES: buy at bestAsk (asking price for YES tokens)
-                # For NO: buy NO tokens, which means selling YES at bestBid
-                if direction == 'YES':
-                    entry_price = best_ask if best_ask is not None else yes_price
-                    profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-                else:
-                    # NO direction: entry price is (1 - bestBid) for YES
-                    entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
-                    profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
-                
-                hours_in_year = 8760
-                if hours_to_expiry > 0:
-                    annualized_yield = ((1 + profit_if_win) ** (hours_in_year / hours_to_expiry)) - 1
-                else:
-                    annualized_yield = 0
-                
-                # Calculate advanced opportunity score
-                score_data = calculate_opportunity_score(
-                    current_prob=yes_price,
-                    momentum=momentum,
-                    hours_to_expiry=hours_to_expiry,
-                    volume=volume,
-                    best_bid=best_bid,
-                    best_ask=best_ask,
-                    direction=direction,
-                    one_day_change=one_day_change,
-                    one_week_change=one_week_change
-                )
-                
-                opportunities.append({
-                    'question': market.get('question', 'Unknown'),
-                    'slug': market.get('slug', ''),
-                    'url': f"https://polymarket.com/market/{market.get('slug', '')}",
-                    'current_prob': yes_price,
-                    'hours_to_expiry': hours_to_expiry,
-                    'end_date': end_dt,
-                    'volume_24h': volume,
-                    'momentum': momentum,
-                    'score': score_data['total_score'],
-                    'grade': score_data['grade'],
-                    'direction': direction,
-                    'annualized_yield': annualized_yield,
-                    'best_bid': best_bid,
-                    'best_ask': best_ask
-                })
             
             opportunities.sort(key=lambda x: x['score'], reverse=True)
             logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
@@ -1562,21 +1654,14 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
 def display_pullback_table(opportunities: List[Dict]):
     """Display opportunities in a compact table."""
     
-    st.markdown("### Momentum Opportunities")
+    st.markdown('<h3 style="margin-top: 0.5rem; margin-bottom: 0.5rem;">Momentum Opportunities</h3>', unsafe_allow_html=True)
     
     if not opportunities:
         st.warning("No opportunities to display")
         return
     
-    # Sorting options
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        sort_method = st.selectbox(
-            "Sort by:",
-            ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
-             "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
-            index=0
-        )
+    # Apply sorting based on session state selection
+    sort_method = st.session_state.get('sort_method', 'Score (High to Low)')
     
     # Sort opportunities based on selection
     if sort_method == "Score (High to Low)":
