@@ -1240,7 +1240,7 @@ def render_pullback_hunter():
             sort_method = st.selectbox(
                 "Sort by:",
                 ["Score (High to Low)", "Probability (High to Low)", "Probability (Low to High)", 
-                 "Momentum (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
+                 "Momentum (High to Low)", "Charm (High to Low)", "APY (High to Low)", "Expires (Soonest First)"],
                 index=0,
                 label_visibility="collapsed"
             )
@@ -1257,6 +1257,10 @@ def render_pullback_hunter():
                 f'✅ Found {len(opportunities)} opportunities (scanned at {scan_time.strftime("%H:%M:%S")})</div>',
                 unsafe_allow_html=True
             )
+    
+    # Auto-scan on page load if no opportunities exist
+    if 'opportunities' not in st.session_state:
+        scan_clicked = True
     
     # Handle scan button click
     if scan_clicked:
@@ -1565,6 +1569,16 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         one_week_change=one_week_change
                     )
                     
+                    # Calculate Charm (delta decay rate)
+                    # Charm = -∂Δ/∂τ measures how momentum changes per day
+                    # Positive charm = momentum accelerating, Negative = decelerating
+                    if days_to_expiry > 0:
+                        # Charm approximation: momentum change rate per day
+                        # Higher absolute charm = faster momentum acceleration/deceleration
+                        charm = (momentum * 100) / days_to_expiry  # Percentage points per day
+                    else:
+                        charm = 0
+                    
                     # Format display question
                     if is_binary:
                         display_question = parent_question
@@ -1581,6 +1595,7 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'end_date': end_dt,
                         'volume_24h': volume,
                         'momentum': momentum,
+                        'charm': charm,
                         'score': score_data['total_score'],
                         'grade': score_data['grade'],
                         'direction': direction,
@@ -1719,6 +1734,8 @@ def display_pullback_table(opportunities: List[Dict]):
         opportunities = sorted(opportunities, key=lambda x: x['current_prob'])
     elif sort_method == "Momentum (High to Low)":
         opportunities = sorted(opportunities, key=lambda x: x.get('momentum', 0), reverse=True)
+    elif sort_method == "Charm (High to Low)":
+        opportunities = sorted(opportunities, key=lambda x: abs(x.get('charm', 0)), reverse=True)
     elif sort_method == "APY (High to Low)":
         opportunities = sorted(opportunities, key=lambda x: x.get('annualized_yield', 0), reverse=True)
     elif sort_method == "Expires (Soonest First)":
@@ -1750,15 +1767,16 @@ def display_pullback_table(opportunities: List[Dict]):
     <table class="momentum-table">
         <thead>
             <tr>
-                <th style="width: 35%;">Market</th>
-                <th style="width: 8%;">Prob</th>
-                <th style="width: 7%;">Dir</th>
-                <th style="width: 8%;">Price</th>
-                <th style="width: 8%;">Mom</th>
-                <th style="width: 8%;">Vol</th>
-                <th style="width: 10%;">Expires</th>
-                <th style="width: 10%;">APY</th>
-                <th style="width: 8%;">Score</th>
+                <th style="width: 38%;">Market</th>
+                <th style="width: 5%;">Prob</th>
+                <th style="width: 4%;">Dir</th>
+                <th style="width: 5%;">Price</th>
+                <th style="width: 6%;">Mom</th>
+                <th style="width: 6%;" title="Delta decay per day">Charm</th>
+                <th style="width: 6%;">Vol</th>
+                <th style="width: 8%;">Expires</th>
+                <th style="width: 7%;">APY</th>
+                <th style="width: 6%;">Score</th>
             </tr>
         </thead>
         <tbody>
@@ -1798,7 +1816,12 @@ def display_pullback_table(opportunities: List[Dict]):
         
         # Volume
         vol = opp['volume_24h']
-        vol_str = f"${vol/1000:.0f}K" if vol >= 1000 else f"${vol:.0f}"
+        if vol >= 1_000_000:
+            vol_str = f"${vol/1_000_000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
         
         # Expiration
         hours = opp['hours_to_expiry']
@@ -1843,6 +1866,16 @@ def display_pullback_table(opportunities: List[Dict]):
             apy_class = "score-c"
             apy_str = f"{ann_yield:.1%}"
         
+        # Charm (delta decay)
+        charm = opp.get('charm', 0)
+        if abs(charm) >= 2.0:
+            charm_class = "mom-high"
+        elif abs(charm) >= 1.0:
+            charm_class = "mom-med"
+        else:
+            charm_class = "mom-low"
+        charm_str = f"{charm:+.1f}%"
+        
         html += f"""
             <tr>
                 <td><a href="{url}" class="market-link" target="_blank">{question}</a></td>
@@ -1850,6 +1883,7 @@ def display_pullback_table(opportunities: List[Dict]):
                 <td><span class="{dir_class}">{direction}</span></td>
                 <td>{price_display}</td>
                 <td><span class="{mom_class}">{mom_str}</span></td>
+                <td><span class="{charm_class}">{charm_str}</span></td>
                 <td>{vol_str}</td>
                 <td><span class="{exp_class}">{exp_str}</span></td>
                 <td><span class="{apy_class}">{apy_str}</span></td>
