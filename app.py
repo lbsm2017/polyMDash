@@ -1193,6 +1193,14 @@ def render_pullback_hunter():
             help="Minimum composite momentum signal (0-100%). Combines proportional (log-odds) and absolute moves. Example: 5%→1% or 60%→88% both score high."
         ) / 100.0  # Convert to decimal
         
+        min_volume = st.select_slider(
+            "Min Volume",
+            options=[50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000],
+            value=500_000,
+            format_func=lambda x: f"${x/1000:.0f}k" if x < 1_000_000 else f"${x/1_000_000:.1f}M",
+            help="Minimum 24h trading volume. Higher volume = better liquidity."
+        )
+        
         limit = st.number_input(
             "Max Markets to Scan", 
             min_value=10, 
@@ -1260,7 +1268,7 @@ def render_pullback_hunter():
                 
                 # Fresh scan
                 logger.info("🔄 Starting fresh market scan...")
-                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum)
+                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum, min_volume)
                 
                 # Store with version tag to invalidate old data
                 st.session_state['opportunities'] = opportunities
@@ -1297,7 +1305,7 @@ def render_pullback_hunter():
             st.warning("No opportunities found. Try adjusting filters.")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15) -> List[Dict]:
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15, min_volume: float = 500_000) -> List[Dict]:
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
@@ -1477,6 +1485,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         continue
                     
                     volume = float(market.get('volume') or 0)
+                    
+                    # Apply volume filter
+                    if volume < min_volume:
+                        continue
                     
                     # Get directional momentum (preserve sign)
                     one_day_change = float(market.get('oneDayPriceChange') or 0)
