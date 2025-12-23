@@ -226,15 +226,45 @@ class TestMomentumHunter:
         assert sorted_opps[2]['hours_to_expiry'] == 72, "Latest should be last"
     
     def test_volume_display_formatting(self):
-        """Test volume display formatting (K for thousands)."""
-        # Large volume
+        """Test volume display formatting (K for thousands, M for millions)."""
+        # Millions
+        vol = 1_500_000
+        if vol >= 1_000_000:
+            vol_str = f"${vol/1_000_000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
+        assert vol_str == "$1.5M", f"Expected $1.5M, got {vol_str}"
+        
+        # Large volume in K
         vol = 11044000
-        vol_str = f"${vol/1000:.0f}K" if vol >= 1000 else f"${vol:.0f}"
-        assert vol_str == "$11044K", f"Expected $11044K, got {vol_str}"
+        if vol >= 1_000_000:
+            vol_str = f"${vol/1_000_000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
+        assert vol_str == "$11.0M", f"Expected $11.0M, got {vol_str}"
+        
+        # Thousands
+        vol = 50000
+        if vol >= 1_000_000:
+            vol_str = f"${vol/1_000_000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
+        assert vol_str == "$50K", f"Expected $50K, got {vol_str}"
         
         # Small volume
         vol = 500
-        vol_str = f"${vol/1000:.0f}K" if vol >= 1000 else f"${vol:.0f}"
+        if vol >= 1_000_000:
+            vol_str = f"${vol/1_000_000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
         assert vol_str == "$500", f"Expected $500, got {vol_str}"
     
     def test_direction_determination(self):
@@ -253,6 +283,191 @@ class TestMomentumHunter:
         yes_price = 0.50
         direction = 'YES' if yes_price >= 0.5 else 'NO'
         assert direction == 'YES', "50% probability should be YES direction (inclusive)"
+    
+    def test_charm_calculation(self):
+        """Test Charm (delta decay) calculation."""
+        # Charm = (momentum * 100) / days_to_expiry
+        
+        # Test case 1: High momentum, short timeframe
+        momentum = 0.30  # 30%
+        days_to_expiry = 3
+        charm = (momentum * 100) / days_to_expiry
+        assert charm == 10.0, f"Expected charm=10.0, got {charm}"
+        
+        # Test case 2: Medium momentum, medium timeframe
+        momentum = 0.20  # 20%
+        days_to_expiry = 7
+        charm = (momentum * 100) / days_to_expiry
+        assert abs(charm - 2.857) < 0.01, f"Expected charm≈2.857, got {charm}"
+        
+        # Test case 3: Low momentum, long timeframe
+        momentum = 0.10  # 10%
+        days_to_expiry = 14
+        charm = (momentum * 100) / days_to_expiry
+        assert abs(charm - 0.714) < 0.01, f"Expected charm≈0.714, got {charm}"
+        
+        # Test case 4: Zero days to expiry edge case
+        momentum = 0.25
+        days_to_expiry = 0
+        charm = 0 if days_to_expiry == 0 else (momentum * 100) / days_to_expiry
+        assert charm == 0, "Charm should be 0 when days_to_expiry is 0"
+    
+    def test_charm_classification(self):
+        """Test Charm classification (high/medium/low)."""
+        # High charm: |charm| >= 2.0
+        charm_high = 2.5
+        is_high = abs(charm_high) >= 2.0
+        assert is_high, "Charm 2.5 should be classified as high"
+        
+        # Medium charm: 1.0 <= |charm| < 2.0
+        charm_med = 1.5
+        is_med = 1.0 <= abs(charm_med) < 2.0
+        assert is_med, "Charm 1.5 should be classified as medium"
+        
+        # Low charm: |charm| < 1.0
+        charm_low = 0.8
+        is_low = abs(charm_low) < 1.0
+        assert is_low, "Charm 0.8 should be classified as low"
+        
+        # Test negative charm values
+        charm_negative = -3.0
+        is_high_negative = abs(charm_negative) >= 2.0
+        assert is_high_negative, "Negative charm -3.0 should be classified as high (by absolute value)"
+    
+    def test_charm_formatting(self):
+        """Test Charm display formatting with 1 decimal and sign."""
+        # Positive charm
+        charm = 2.15
+        charm_str = f"{charm:+.1f}%"
+        assert charm_str == "+2.1%", f"Expected '+2.1%', got {charm_str}"
+        
+        # Negative charm
+        charm = -1.87
+        charm_str = f"{charm:+.1f}%"
+        assert charm_str == "-1.9%", f"Expected '-1.9%', got {charm_str}"
+        
+        # Zero charm
+        charm = 0.0
+        charm_str = f"{charm:+.1f}%"
+        assert charm_str == "+0.0%", f"Expected '+0.0%', got {charm_str}"
+    
+    def test_charm_sorting(self):
+        """Test sorting opportunities by absolute charm value."""
+        opportunities = [
+            {'question': 'Market 1', 'charm': 1.5},
+            {'question': 'Market 2', 'charm': -3.2},
+            {'question': 'Market 3', 'charm': 0.8},
+            {'question': 'Market 4', 'charm': 2.7},
+        ]
+        
+        sorted_opps = sorted(opportunities, key=lambda x: abs(x.get('charm', 0)), reverse=True)
+        
+        assert sorted_opps[0]['charm'] == -3.2, "Highest absolute charm should be first"
+        assert sorted_opps[1]['charm'] == 2.7, "Second highest absolute charm should be second"
+        assert sorted_opps[2]['charm'] == 1.5, "Third highest absolute charm should be third"
+        assert sorted_opps[3]['charm'] == 0.8, "Lowest absolute charm should be last"
+    
+    def test_volume_filtering(self):
+        """Test minimum volume filter."""
+        min_volume = 500_000  # Default 500k
+        
+        # Markets to test
+        markets = [
+            {'volume': 1_000_000, 'should_pass': True},
+            {'volume': 500_000, 'should_pass': True},
+            {'volume': 499_999, 'should_pass': False},
+            {'volume': 100_000, 'should_pass': False},
+            {'volume': 0, 'should_pass': False},
+        ]
+        
+        for market in markets:
+            passes_filter = market['volume'] >= min_volume
+            assert passes_filter == market['should_pass'], \
+                f"Volume {market['volume']} should {'pass' if market['should_pass'] else 'fail'} filter"
+    
+    def test_apy_formatting(self):
+        """Test APY display formatting (x notation for >10000%)."""
+        # >10000% - use x notation without decimal
+        ann_yield = 150  # 15000%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "x150", f"Expected 'x150', got {apy_str}"
+        
+        # Edge case: exactly 100 (10000%)
+        ann_yield = 100
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "10000.0%", f"Expected percentage for 100, got {apy_str}"
+        
+        # 100-1000% - use percentage
+        ann_yield = 5.5  # 550%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "550.0%", f"Expected '550.0%', got {apy_str}"
+        
+        # <100% - use percentage
+        ann_yield = 0.75  # 75%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "75.0%", f"Expected '75.0%', got {apy_str}"
+    
+    def test_apy_color_classification(self):
+        """Test APY color class assignment."""
+        # Dark green (apy-extreme) for >10000%
+        ann_yield = 250  # 25000%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "apy-extreme", "APY >10000% should be dark green"
+        
+        # Light green (apy-high) for 100-1000%
+        ann_yield = 5  # 500%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "apy-high", "APY 100-1000% should be light green"
+        
+        # Orange (score-b) for 50-100%
+        ann_yield = 0.75  # 75%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "score-b", "APY 50-100% should be orange"
+        
+        # Blue (score-c) for <50%
+        ann_yield = 0.25  # 25%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "score-c", "APY <50% should be blue"
 
 
 class TestMomentumIntegration:
