@@ -1549,8 +1549,6 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         else:
                             try:
                                 annualized_yield = ((1 + profit_if_win) ** exponent) - 1
-                                if annualized_yield > 100:
-                                    annualized_yield = 100
                             except (OverflowError, ValueError):
                                 annualized_yield = 0
                     else:
@@ -1637,9 +1635,6 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         else:
                             try:
                                 annualized_yield = ((1 + profit_if_win) ** exponent) - 1
-                                # Cap at 10000% (100x) to prevent display issues
-                                if annualized_yield > 100:
-                                    annualized_yield = 100
                             except (OverflowError, ValueError):
                                 annualized_yield = 0
                     else:
@@ -1760,6 +1755,8 @@ def display_pullback_table(opportunities: List[Dict]):
         .exp-urgent { color: #e74c3c; font-weight: 600; }
         .exp-soon { color: #f39c12; font-weight: 600; }
         .exp-normal { color: #3498db; }
+        .apy-extreme { color: #1e7e34; font-weight: 600; }  /* dark green for >10000% */
+        .apy-high { color: #27ae60; font-weight: 600; }  /* light green for 100-1000% */
         .score-a { color: #27ae60; font-weight: 600; }
         .score-b { color: #f39c12; font-weight: 600; }
         .score-c { color: #3498db; }
@@ -1851,13 +1848,13 @@ def display_pullback_table(opportunities: List[Dict]):
         
         score_str = f"{score:.0f} {grade}"
         
-        # Annualized Yield - 1 decimal
+        # Annualized Yield - use multiples (x) for >10000%
         ann_yield = opp.get('annualized_yield', 0)
-        if ann_yield > 10:  # >1000%
-            apy_class = "score-a"
-            apy_str = f"{ann_yield:.1%}"
-        elif ann_yield > 2:  # >200%
-            apy_class = "score-a"
+        if ann_yield > 100:  # >10000% - dark green
+            apy_class = "apy-extreme"
+            apy_str = f"x{ann_yield:.0f}"
+        elif ann_yield > 1:  # 100-1000% - light green
+            apy_class = "apy-high"
             apy_str = f"{ann_yield:.1%}"
         elif ann_yield > 0.5:  # >50%
             apy_class = "score-b"
