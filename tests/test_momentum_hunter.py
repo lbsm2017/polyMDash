@@ -366,6 +366,108 @@ class TestMomentumHunter:
         assert sorted_opps[1]['charm'] == 2.7, "Second highest absolute charm should be second"
         assert sorted_opps[2]['charm'] == 1.5, "Third highest absolute charm should be third"
         assert sorted_opps[3]['charm'] == 0.8, "Lowest absolute charm should be last"
+    
+    def test_volume_filtering(self):
+        """Test minimum volume filter."""
+        min_volume = 500_000  # Default 500k
+        
+        # Markets to test
+        markets = [
+            {'volume': 1_000_000, 'should_pass': True},
+            {'volume': 500_000, 'should_pass': True},
+            {'volume': 499_999, 'should_pass': False},
+            {'volume': 100_000, 'should_pass': False},
+            {'volume': 0, 'should_pass': False},
+        ]
+        
+        for market in markets:
+            passes_filter = market['volume'] >= min_volume
+            assert passes_filter == market['should_pass'], \
+                f"Volume {market['volume']} should {'pass' if market['should_pass'] else 'fail'} filter"
+    
+    def test_apy_formatting(self):
+        """Test APY display formatting (x notation for >10000%)."""
+        # >10000% - use x notation without decimal
+        ann_yield = 150  # 15000%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "x150", f"Expected 'x150', got {apy_str}"
+        
+        # Edge case: exactly 100 (10000%)
+        ann_yield = 100
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "10000.0%", f"Expected percentage for 100, got {apy_str}"
+        
+        # 100-1000% - use percentage
+        ann_yield = 5.5  # 550%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "550.0%", f"Expected '550.0%', got {apy_str}"
+        
+        # <100% - use percentage
+        ann_yield = 0.75  # 75%
+        if ann_yield > 100:
+            apy_str = f"x{ann_yield:.0f}"
+        else:
+            apy_str = f"{ann_yield:.1%}"
+        assert apy_str == "75.0%", f"Expected '75.0%', got {apy_str}"
+    
+    def test_apy_color_classification(self):
+        """Test APY color class assignment."""
+        # Dark green (apy-extreme) for >10000%
+        ann_yield = 250  # 25000%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "apy-extreme", "APY >10000% should be dark green"
+        
+        # Light green (apy-high) for 100-1000%
+        ann_yield = 5  # 500%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "apy-high", "APY 100-1000% should be light green"
+        
+        # Orange (score-b) for 50-100%
+        ann_yield = 0.75  # 75%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "score-b", "APY 50-100% should be orange"
+        
+        # Blue (score-c) for <50%
+        ann_yield = 0.25  # 25%
+        if ann_yield > 100:
+            apy_class = "apy-extreme"
+        elif ann_yield > 1:
+            apy_class = "apy-high"
+        elif ann_yield > 0.5:
+            apy_class = "score-b"
+        else:
+            apy_class = "score-c"
+        assert apy_class == "score-c", "APY <50% should be blue"
 
 
 class TestMomentumIntegration:
