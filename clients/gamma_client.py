@@ -43,6 +43,8 @@ class GammaClient:
         """Async context manager exit."""
         if self._own_session and self.session:
             await self.session.close()
+            # Give time for connections to close properly
+            await asyncio.sleep(0.250)
             
     async def _request(self, endpoint: str, params: Optional[Dict] = None) -> Any:
         """
