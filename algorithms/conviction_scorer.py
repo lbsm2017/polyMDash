@@ -588,15 +588,15 @@ class ConvictionScorer:
         - Mixed positions or far expiration = LOW
         
         Returns:
-            Tuple of (level_name, emoji)
+            Tuple of (level_name, indicator)
         """
         if score >= 100:
-            return ("🔥 EXTREME", "🔥")
+            return ("EXTREME", "[EXTREME]")
         elif score >= 60:
-            return ("💎 HIGH", "💎")
+            return ("HIGH", "[HIGH]")
         elif score >= 30:
-            return ("📈 MODERATE", "📈")
+            return ("MODERATE", "[MODERATE]")
         elif score >= 10:
-            return ("👀 LOW", "👀")
+            return ("LOW", "[LOW]")
         else:
-            return ("💤 MINIMAL", "💤")
+            return ("MINIMAL", "[MINIMAL]")

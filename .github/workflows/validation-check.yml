@@ -6,6 +6,11 @@ on:
   push:
     branches: [ main, develop ]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   validate-scoring:
     name: Validate Scoring Algorithm
@@ -31,10 +36,10 @@ jobs:
       run: |
         if git diff --name-only origin/main...HEAD | grep -q "app.py"; then
           echo "app_changed=true" >> $GITHUB_OUTPUT
-          echo "🔍 app.py modified - running comprehensive validation"
+          echo "app.py modified - running comprehensive validation"
         else
           echo "app_changed=false" >> $GITHUB_OUTPUT
-          echo "ℹ️  app.py not modified - running quick validation"
+          echo "app.py not modified - running quick validation"
         fi
     
     - name: Quick Validation (Smoke Test)
@@ -56,13 +61,13 @@ jobs:
           const fs = require('fs');
           const appChanged = '${{ steps.check_changes.outputs.app_changed }}' === 'true';
           
-          let comment = '## ✅ Validation Results\n\n';
+          let comment = '## Validation Results\n\n';
           comment += '**Quick Validation**: Completed (64 tests)\n\n';
           
           if (appChanged) {
             comment += '**Full Validation**: Completed (114 tests)\n';
             comment += '**Rigorous Testing**: Completed\n\n';
-            comment += '⚠️ `app.py` modified - comprehensive validation run\n';
+            comment += 'NOTE: `app.py` modified - comprehensive validation run\n';
           } else {
             comment += '**Note**: `app.py` not modified - full suite skipped for faster CI\n';
           }
