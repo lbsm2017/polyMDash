@@ -1461,17 +1461,17 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
             logger.info(f"Sample markets: {sample_questions}")
         
         filtered = markets  # Already filtered for crypto
-            
-            if debug_mode:
-                logger.info(f"Debug mode: Processing {len(filtered)} non-crypto markets")
-            
-            opportunities = []
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            
-            # Filter thresholds
-            max_hours_short = max_expiry_hours  # User-specified window (hard cap)
-            high_momentum = 0.30  # 30% absolute momentum is considered high
+        
+        if debug_mode:
+            logger.info(f"Debug mode: Processing {len(filtered)} non-crypto markets")
+        
+        opportunities = []
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        
+        # Filter thresholds
+        max_hours_short = max_expiry_hours  # User-specified window (hard cap)
+        high_momentum = 0.30  # 30% absolute momentum is considered high
             
             processed = 0
             skipped = 0
