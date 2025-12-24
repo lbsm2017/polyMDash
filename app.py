@@ -4,11 +4,12 @@ Surfaces high-conviction trades from tracked users with consensus signals.
 """
 
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 from typing import List, Dict, Optional, Tuple
 import logging
 import math
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,9 +29,11 @@ from clients.api_pool import fetch_all_data, APIPool
 from clients.leaderboard_client import LeaderboardClient
 from utils.user_tracker import get_user_tracker
 from algorithms.conviction_scorer import ConvictionScorer
+from data.database import get_database
 
 # Initialize
 tracker = get_user_tracker()
+db = get_database()  # Database instance for caching
 
 # Custom CSS
 st.markdown("""
@@ -1247,14 +1250,22 @@ def render_pullback_hunter():
             st.session_state['sort_method'] = sort_method
     
     with col_stats:
-        # Display results status in the same row
+        # Display results status and cache status in the same row
         if 'opportunities' in st.session_state:
             opportunities = st.session_state['opportunities']
             scan_time = st.session_state.get('scan_time', datetime.now())
+            
+            # Check cache status
+            cache_age = db.get_cache_age('markets')
+            cache_status = ""
+            if cache_age is not None and cache_age < 300:
+                cache_mins = int(cache_age / 60)
+                cache_status = f" | 💾 Cache: {cache_mins}m old"
+            
             st.markdown(
                 f'<div style="padding: 0.4rem 0.75rem; background-color: #d4edda; color: #155724; '
                 f'border-radius: 0.25rem; margin-top: 0.15rem;">'
-                f'✅ Found {len(opportunities)} opportunities (scanned at {scan_time.strftime("%H:%M:%S")})</div>',
+                f'✅ Found {len(opportunities)} opportunities (scanned at {scan_time.strftime("%H:%M:%S")}){cache_status}</div>',
                 unsafe_allow_html=True
             )
     
@@ -1313,77 +1324,140 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
-        async with GammaClient() as client:
-            # Try multiple sorting strategies to get diverse markets
-            # Volume sorting returns only crypto, so we'll use multiple approaches
-            
+        # ===== DATABASE CACHING FOR MARKET DATA =====
+        # Check if we have fresh market data in cache (5 min threshold)
+        cache_max_age = 300  # 5 minutes for market structure data
+        cache_age = db.get_cache_age('markets')
+        use_cache = cache_age is not None and cache_age < cache_max_age
+        
+        if use_cache:
+            logger.info(f"Using cached market data (age: {cache_age:.0f}s)")
+            all_markets_raw = db.get_active_markets(limit=500)
+            # Convert back to API format
             all_markets = []
-            excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
-                            'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
-            
-            def is_excluded(market):
-                slug = (market.get('slug', '') or '').lower()
-                question = (market.get('question', '') or '').lower()
-                return any(ex in slug or ex in question for ex in excluded_terms)
-            
-            # Strategy 1: Fetch by liquidity (different from volume)
-            logger.info("Fetching markets sorted by liquidity...")
-            try:
-                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="liquidity")
-                non_crypto = [m for m in markets if not is_excluded(m)]
-                logger.info(f"Liquidity sort: {len(markets)} total, {len(non_crypto)} non-crypto")
-                all_markets.extend(non_crypto)
-            except Exception as e:
-                logger.warning(f"Liquidity sort failed: {e}")
-            
-            # Strategy 2: Fetch without sorting (API default)
-            logger.info("Fetching markets with default sorting...")
-            try:
-                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="")
-                non_crypto = [m for m in markets if not is_excluded(m)]
-                logger.info(f"Default sort: {len(markets)} total, {len(non_crypto)} non-crypto")
-                all_markets.extend(non_crypto)
-            except Exception as e:
-                logger.warning(f"Default sort failed: {e}")
-            
-            # Strategy 3: Use offset to get different market sets
-            if len(all_markets) < 100:
-                logger.info("Few non-crypto markets found, trying offset pagination...")
-                for offset in [500, 1000, 1500]:
+            for m in all_markets_raw:
+                # Parse JSON strings back to objects
+                outcomes = m.get('outcomes', '[]')
+                if isinstance(outcomes, str):
                     try:
-                        markets = await client.get_markets(
-                            limit=min(500, limit),
-                            offset=offset,
-                            active=True,
-                            closed=False,
-                            order_by="volume24hr"
-                        )
-                        non_crypto = [m for m in markets if not is_excluded(m)]
-                        logger.info(f"Offset {offset}: {len(markets)} total, {len(non_crypto)} non-crypto")
-                        all_markets.extend(non_crypto)
-                        if len(all_markets) >= 200:
-                            break
-                    except Exception as e:
-                        logger.warning(f"Offset {offset} failed: {e}")
+                        outcomes = json.loads(outcomes)
+                    except:
+                        outcomes = []
+                
+                outcome_prices = m.get('outcome_prices', '{}')
+                if isinstance(outcome_prices, str):
+                    try:
+                        outcome_prices = json.loads(outcome_prices)
+                    except:
+                        outcome_prices = {}
+                
+                all_markets.append({
+                    'id': m.get('id'),
+                    'question': m.get('question'),
+                    'slug': m.get('slug'),
+                    'category': m.get('category'),
+                    'active': m.get('active'),
+                    'closed': m.get('closed'),
+                    'endDate': m.get('end_date'),
+                    'outcomes': outcomes,
+                    'outcomePrices': outcome_prices,
+                    'liquidity': m.get('liquidity'),
+                    'volume': m.get('volume'),
+                    'volume24hr': m.get('volume_24h'),
+                    'oneDayPriceChange': 0,  # Will be calculated from price history
+                    'oneWeekPriceChange': 0,  # Will be calculated from price history
+                    'bestBid': None,  # Not cached
+                    'bestAsk': None   # Not cached
+                })
+        else:
+            # Fetch fresh data from API
+            logger.info(f"Fetching fresh market data from API (cache age: {cache_age if cache_age else 'None'})")
             
-            # Deduplicate by slug
-            seen = set()
-            markets = []
-            for m in all_markets:
-                slug = m.get('slug', '')
-                if slug and slug not in seen:
-                    seen.add(slug)
-                    markets.append(m)
-            
-            logger.info(f"Combined {len(markets)} unique non-crypto markets from all strategies")
-            
-            if not markets:
-                logger.error("No non-crypto markets found with any strategy!")
-                return []
-            
-            # Log sample
-            if len(markets) >= 5:
-                sample_questions = [m.get('question', 'N/A')[:50] for m in markets[:5]]
+            async with GammaClient() as client:
+                # Try multiple sorting strategies to get diverse markets
+                # Volume sorting returns only crypto, so we'll use multiple approaches
+                
+                all_markets = []
+                excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
+                                'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
+                
+                def is_excluded(market):
+                    slug = (market.get('slug', '') or '').lower()
+                    question = (market.get('question', '') or '').lower()
+                    return any(ex in slug or ex in question for ex in excluded_terms)
+                
+                # Strategy 1: Fetch by liquidity (different from volume)
+                logger.info("Fetching markets sorted by liquidity...")
+                try:
+                    markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="liquidity")
+                    non_crypto = [m for m in markets if not is_excluded(m)]
+                    logger.info(f"Liquidity sort: {len(markets)} total, {len(non_crypto)} non-crypto")
+                    all_markets.extend(non_crypto)
+                except Exception as e:
+                    logger.warning(f"Liquidity sort failed: {e}")
+                
+                # Strategy 2: Fetch without sorting (API default)
+                logger.info("Fetching markets with default sorting...")
+                try:
+                    markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="")
+                    non_crypto = [m for m in markets if not is_excluded(m)]
+                    logger.info(f"Default sort: {len(markets)} total, {len(non_crypto)} non-crypto")
+                    all_markets.extend(non_crypto)
+                except Exception as e:
+                    logger.warning(f"Default sort failed: {e}")
+                
+                # Strategy 3: Use offset to get different market sets
+                if len(all_markets) < 100:
+                    logger.info("Few non-crypto markets found, trying offset pagination...")
+                    for offset in [500, 1000, 1500]:
+                        try:
+                            markets = await client.get_markets(
+                                limit=min(500, limit),
+                                offset=offset,
+                                active=True,
+                                closed=False,
+                                order_by="volume24hr"
+                            )
+                            non_crypto = [m for m in markets if not is_excluded(m)]
+                            logger.info(f"Offset {offset}: {len(markets)} total, {len(non_crypto)} non-crypto")
+                            all_markets.extend(non_crypto)
+                            if len(all_markets) >= 200:
+                                break
+                        except Exception as e:
+                            logger.warning(f"Offset {offset} failed: {e}")
+                
+            # Cache the fetched markets
+            if all_markets:
+                logger.info(f"Caching {len(all_markets)} markets to database")
+                db.bulk_upsert_markets(all_markets)
+        
+        # Filter excluded terms from cached data
+        excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
+                        'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
+        
+        def is_excluded(market):
+            slug = (market.get('slug', '') or '').lower()
+            question = (market.get('question', '') or '').lower()
+            return any(ex in slug or ex in question for ex in excluded_terms)
+        
+        # Deduplicate by slug
+        seen = set()
+        markets = []
+        for m in all_markets:
+            slug = m.get('slug', '')
+            if slug and slug not in seen:
+                seen.add(slug)
+                markets.append(m)
+        
+        logger.info(f"Combined {len(markets)} unique non-crypto markets from all strategies")
+        
+        if not markets:
+            logger.error("No non-crypto markets found with any strategy!")
+            return []
+        
+        # Log sample
+        if len(markets) >= 5:
+            sample_questions = [m.get('question', 'N/A')[:50] for m in markets[:5]]
                 logger.info(f"Sample markets: {sample_questions}")
             
             filtered = markets  # Already filtered for crypto
@@ -1495,14 +1569,39 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         continue
                     
                     # Get directional momentum (preserve sign)
-                    one_day_change = float(market.get('oneDayPriceChange') or 0)
-                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                    # ===== PRICE HISTORY CACHING =====
+                    # Try to get momentum from cached price history first
+                    market_id = market.get('id')
+                    cached_momentum_data = None
                     
-                    # Select momentum based on time window
-                    if momentum_window_hours <= 24:
-                        directional_momentum = one_day_change
+                    if market_id:
+                        cached_momentum_data = db.get_momentum_from_cache(market_id, momentum_window_hours)
+                    
+                    # Use cached momentum if fresh (< 2 minutes old)
+                    if cached_momentum_data and cached_momentum_data['data_age_seconds'] < 120:
+                        directional_momentum = cached_momentum_data['momentum']
+                        logger.debug(f"Using cached momentum for {market.get('slug')}: {directional_momentum:.3f}")
                     else:
-                        directional_momentum = one_week_change
+                        # Fetch from API and cache
+                        one_day_change = float(market.get('oneDayPriceChange') or 0)
+                        one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                        
+                        # Select momentum based on time window
+                        if momentum_window_hours <= 24:
+                            directional_momentum = one_day_change
+                        else:
+                            directional_momentum = one_week_change
+                        
+                        # Cache the current price for future momentum calculations
+                        if market_id:
+                            db.add_price_update({
+                                'market_id': market_id,
+                                'outcome': outcome_name,
+                                'price': yes_price,
+                                'volume': volume,
+                                'liquidity': market.get('liquidity'),
+                                'timestamp': datetime.now().isoformat()
+                            })
                     
                     # =================================================================
                     # SIMPLE DIRECTION LOGIC (User's Request)

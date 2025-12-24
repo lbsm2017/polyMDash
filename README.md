@@ -40,6 +40,23 @@ Monitors specific traders' positions with multi-factor conviction analysis.
 - Consensus detection across multiple traders
 - Sortable by activity, conviction, volume, or trade count
 
+## Features
+
+### Database Caching
+Smart caching system to reduce API calls and improve performance:
+
+**Market Data Cache** (5-minute TTL):
+- Stores market structure, questions, outcomes, prices
+- Automatic cache validation with timestamps
+- Falls back to API if cache is stale
+
+**Price History Cache** (2-minute TTL):
+- Tracks price changes over time for momentum calculations
+- Enables offline momentum analysis
+- Reduces API rate limiting
+
+Cache status displayed in UI showing data freshness.
+
 ## Usage
 
 1. **Select Strategy**: Choose from dropdown (Momentum Hunter or Conviction Tracker)

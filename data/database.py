@@ -145,6 +145,55 @@ class Database:
         self.conn.commit()
         logger.info("Database schema initialized")
         
+    # ===== Cache Management Methods =====
+    
+    def is_cache_fresh(self, table: str, max_age_seconds: int = 300) -> bool:
+        """
+        Check if cached data in a table is fresh enough.
+        
+        Args:
+            table: Table name to check
+            max_age_seconds: Maximum age in seconds (default 5 minutes)
+            
+        Returns:
+            True if cache is fresh, False otherwise
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT MAX(updated_at) as last_update FROM {table}
+        """)
+        result = cursor.fetchone()
+        
+        if not result or not result['last_update']:
+            return False
+            
+        last_update = datetime.fromisoformat(result['last_update'])
+        age_seconds = (datetime.now() - last_update).total_seconds()
+        
+        return age_seconds <= max_age_seconds
+    
+    def get_cache_age(self, table: str) -> Optional[float]:
+        """
+        Get the age of cached data in seconds.
+        
+        Args:
+            table: Table name to check
+            
+        Returns:
+            Age in seconds, or None if no data
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT MAX(updated_at) as last_update FROM {table}
+        """)
+        result = cursor.fetchone()
+        
+        if not result or not result['last_update']:
+            return None
+            
+        last_update = datetime.fromisoformat(result['last_update'])
+        return (datetime.now() - last_update).total_seconds()
+        
     # ===== Markets Methods =====
     
     def upsert_market(self, market_data: Dict):
@@ -406,6 +455,84 @@ class Database:
         """, (market_id, hours))
         
         return [dict(row) for row in cursor.fetchall()]
+    
+    def get_momentum_from_cache(self, market_id: str, hours: int = 48) -> Optional[Dict]:
+        """
+        Calculate momentum from cached price history.
+        
+        Args:
+            market_id: Market identifier
+            hours: Time window for momentum calculation
+            
+        Returns:
+            Dict with momentum data or None if insufficient data
+        """
+        history = self.get_price_history(market_id, hours)
+        
+        if len(history) < 2:
+            return None
+            
+        oldest = history[0]
+        newest = history[-1]
+        
+        price_change = newest['price'] - oldest['price']
+        time_delta = (datetime.fromisoformat(newest['timestamp']) - 
+                     datetime.fromisoformat(oldest['timestamp'])).total_seconds() / 3600
+        
+        return {
+            'momentum': price_change,
+            'time_hours': time_delta,
+            'oldest_price': oldest['price'],
+            'newest_price': newest['price'],
+            'data_age_seconds': (datetime.now() - 
+                               datetime.fromisoformat(newest['timestamp'])).total_seconds()
+        }
+    
+    def bulk_upsert_markets(self, markets: List[Dict]):
+        """
+        Bulk insert or update multiple markets efficiently.
+        
+        Args:
+            markets: List of market data dictionaries
+        """
+        cursor = self.conn.cursor()
+        
+        for market_data in markets:
+            cursor.execute("""
+                INSERT INTO markets (
+                    id, question, slug, category, active, closed, end_date,
+                    outcomes, outcome_prices, liquidity, volume, volume_24h, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    question = excluded.question,
+                    category = excluded.category,
+                    active = excluded.active,
+                    closed = excluded.closed,
+                    end_date = excluded.end_date,
+                    outcomes = excluded.outcomes,
+                    outcome_prices = excluded.outcome_prices,
+                    liquidity = excluded.liquidity,
+                    volume = excluded.volume,
+                    volume_24h = excluded.volume_24h,
+                    updated_at = excluded.updated_at
+            """, (
+                market_data.get('id'),
+                market_data.get('question'),
+                market_data.get('slug'),
+                market_data.get('category'),
+                market_data.get('active'),
+                market_data.get('closed'),
+                market_data.get('endDate'),
+                json.dumps(market_data.get('outcomes', [])),
+                json.dumps(market_data.get('outcomePrices', {})),
+                market_data.get('liquidity'),
+                market_data.get('volume'),
+                market_data.get('volume24hr'),
+                datetime.now().isoformat()
+            ))
+        
+        self.conn.commit()
+        logger.info(f"Bulk upserted {len(markets)} markets")
         
     # ===== Watchlist Methods =====
     
