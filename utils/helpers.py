@@ -244,20 +244,20 @@ def aggregate_volume_by_period(
 
 def get_market_status_emoji(market: Dict) -> str:
     """
-    Get emoji for market status.
+    Get status indicator for market.
     
     Args:
         market: Market data dictionary
         
     Returns:
-        Emoji string
+        Status indicator string
     """
     if market.get('closed'):
-        return "🔒"
+        return "[CLOSED]"
     elif market.get('active'):
-        return "🟢"
+        return "[ACTIVE]"
     else:
-        return "⚫"
+        return "[INACTIVE]"
 
 
 def format_large_number(number: float) -> str:

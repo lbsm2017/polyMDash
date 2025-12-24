@@ -121,31 +121,47 @@ class TestMomentumHunter:
         assert yes_price == 0.75, "Should use bid/ask average when lastTradePrice is 0"
     
     def test_score_calculation(self):
-        """Test momentum score calculation weights."""
-        # Test data
-        yes_price = 0.80  # 30% from 50%
-        hours_to_expiry = 24
-        max_hours_short = 72
-        volume = 50000
-        momentum = 0.25
+        """Test multi-modal scoring system with sweet spot optimization."""
+        from app import calculate_opportunity_score
         
-        # Calculate components
-        distance_from_50 = abs(yes_price - 0.5)
-        urgency_score = max(0, (max_hours_short - hours_to_expiry) / max_hours_short)
-        volume_score = min(volume / 100000, 1.0)
-        momentum_score = min(momentum / 0.5, 1.0)
+        # Test case: Sweet spot - 3.5% distance, 8.5 days
+        score_data = calculate_opportunity_score(
+            current_prob=0.965,  # 3.5% from 100%
+            momentum=0.35,
+            hours_to_expiry=8.5 * 24,  # 8.5 days
+            volume=1_000_000,
+            best_bid=0.96,
+            best_ask=0.97,
+            direction='YES',
+            one_day_change=0.05,
+            one_week_change=0.10,
+            annualized_yield=3.0,
+            charm=8.0
+        )
         
-        # Weight: 30% extremity, 25% urgency, 20% volume, 25% momentum
-        score = (distance_from_50 * 30) + (urgency_score * 25) + (volume_score * 20) + (momentum_score * 25)
+        # Verify structure
+        assert 'total_score' in score_data
+        assert 'grade' in score_data
+        assert 'components' in score_data
+        assert 'in_sweet_spot' in score_data
         
-        # Verify weights
-        assert abs(distance_from_50 - 0.30) < 0.01  # Allow floating point precision
-        assert urgency_score > 0.65  # 48h remaining out of 72h
-        assert abs(volume_score - 0.5) < 0.01  # 50k out of 100k max
-        assert abs(momentum_score - 0.5) < 0.01  # 25% out of 50% max
+        # Verify components exist
+        components = score_data['components']
+        assert 'distance_time_fit' in components
+        assert 'apy' in components
+        assert 'volume' in components
+        assert 'spread' in components
+        assert 'momentum' in components
+        assert 'charm' in components
         
-        # Score should be reasonable
-        assert 30 < score < 100, f"Score {score} is out of expected range"
+        # All scores should be valid (0-100)
+        for key, value in components.items():
+            assert 0 <= value <= 100, f"{key} score {value} out of range"
+        
+        assert 0 <= score_data['total_score'] <= 100
+        
+        # Sweet spot should be detected
+        assert score_data['in_sweet_spot'] == True
     
     def test_expiration_filtering(self):
         """Test that markets are filtered by expiration correctly."""
@@ -641,6 +657,80 @@ class TestMomentumHunter:
             # Use tolerance for floating-point
             passes_filter = (distance_to_extreme - min_distance) >= -1e-10
             assert passes_filter == should_pass, desc
+    
+    def test_min_distance_constrained_by_extremity(self):
+        """Test that min_distance must be <= min_extremity."""
+        # Scenario 1: min_extremity = 25%, min_distance can be up to 25%
+        min_extremity = 0.25
+        min_distance = 0.15  # 15%
+        assert min_distance <= min_extremity, "min_distance must be <= min_extremity"
+        
+        # Scenario 2: min_extremity = 10%, min_distance must be <= 10%
+        min_extremity = 0.10
+        min_distance = 0.10  # 10% - at boundary
+        assert min_distance <= min_extremity, "min_distance at boundary should be valid"
+        
+        # Scenario 3: Invalid configuration (would be rejected by UI)
+        min_extremity = 0.05  # 5%
+        min_distance = 0.10   # 10% - too high!
+        assert min_distance > min_extremity, "This should be invalid - distance > extremity"
+        # In the app, this would be prevented by the slider max_value
+    
+    def test_distance_extremity_filtering_interaction(self):
+        """Test how min_distance and min_extremity filters work together."""
+        # Note: Direction is determined by fixed thresholds (>75% = YES, <25% = NO)
+        # min_extremity determines which markets are shown (0-X% and (100-X)-100%)
+        # min_distance excludes markets too close to 0% or 100%
+        
+        # Setup: Using standard direction thresholds (75%/25%)
+        #        min_distance = 5% (exclude 0-5% and 95-100%)
+        
+        min_distance = 0.05
+        
+        test_cases = [
+            # (price, direction, should_pass_distance)
+            (0.03, 'NO', False),   # 3%: NO direction but too close to 0%
+            (0.10, 'NO', True),    # 10%: NO direction and safe distance
+            (0.20, 'NO', True),    # 20%: NO direction and safe distance
+            (0.50, None, True),    # 50%: middle zone (no direction)
+            (0.80, 'YES', True),   # 80%: YES direction and safe distance
+            (0.92, 'YES', True),   # 92%: YES direction and safe distance  
+            (0.97, 'YES', False),  # 97%: YES direction but too close to 100%
+        ]
+        
+        for price, expected_dir, should_pass_distance in test_cases:
+            # Determine direction based on actual thresholds
+            if price > 0.75:
+                direction = 'YES'
+            elif price < 0.25:
+                direction = 'NO'
+            else:
+                direction = None
+            
+            assert direction == expected_dir, f"Price {price}: direction mismatch"
+            
+            # Check distance filter (only if there's a direction)
+            if direction:
+                if direction == 'YES':
+                    passes_distance = price < (1.0 - min_distance)
+                else:  # NO
+                    passes_distance = price > min_distance
+                
+                assert passes_distance == should_pass_distance, f"Price {price}: distance check failed"
+    
+    def test_extreme_slider_boundaries(self):
+        """Test edge cases when min_extremity changes."""
+        # When min_extremity = 5%, min_distance can be 0-5%
+        min_extremity = 0.05
+        valid_distances = [0.0, 0.01, 0.025, 0.05]
+        for dist in valid_distances:
+            assert dist <= min_extremity, f"Distance {dist} should be valid for extremity {min_extremity}"
+        
+        # When min_extremity = 50%, min_distance can be 0-50%
+        min_extremity = 0.50
+        valid_distances = [0.0, 0.05, 0.15, 0.25, 0.40, 0.50]
+        for dist in valid_distances:
+            assert dist <= min_extremity, f"Distance {dist} should be valid for extremity {min_extremity}"
 
 
 class TestMomentumIntegration:

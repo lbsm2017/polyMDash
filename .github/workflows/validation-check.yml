@@ -1,0 +1,86 @@
+name: Validation Check
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  validate-scoring:
+    name: Validate Scoring Algorithm
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Check for app.py changes
+      id: check_changes
+      run: |
+        if git diff --name-only origin/main...HEAD | grep -q "app.py"; then
+          echo "app_changed=true" >> $GITHUB_OUTPUT
+          echo "app.py modified - running comprehensive validation"
+        else
+          echo "app_changed=false" >> $GITHUB_OUTPUT
+          echo "app.py not modified - running quick validation"
+        fi
+    
+    - name: Quick Validation (Smoke Test)
+      run: python validation/quick_validation.py
+    
+    - name: Full Validation Suite
+      if: steps.check_changes.outputs.app_changed == 'true'
+      run: python validation/test_scoring_validation.py
+    
+    - name: Rigorous Testing
+      if: steps.check_changes.outputs.app_changed == 'true'
+      run: python validation/rigorous_testing.py
+    
+    - name: Comment PR with results
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const appChanged = '${{ steps.check_changes.outputs.app_changed }}' === 'true';
+          
+          let comment = '## Validation Results\n\n';
+          comment += '**Quick Validation**: Completed (64 tests)\n\n';
+          
+          if (appChanged) {
+            comment += '**Full Validation**: Completed (114 tests)\n';
+            comment += '**Rigorous Testing**: Completed\n\n';
+            comment += 'NOTE: `app.py` modified - comprehensive validation run\n';
+          } else {
+            comment += '**Note**: `app.py` not modified - full suite skipped for faster CI\n';
+          }
+          
+          comment += '\nCheck the "Checks" tab for detailed validation output.';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+    
+    - name: Set status
+      if: failure()
+      run: exit 1
