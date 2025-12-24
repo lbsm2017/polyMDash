@@ -1,0 +1,46 @@
+2025-12-24 12:23:28.941 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+INFO:utils.user_tracker:Loaded 14 tracked users
+2025-12-24 12:23:29.360 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-12-24 12:23:29.733 
+  [33m[1mWarning:[0m to view this Streamlit app on a browser, run it with the following
+  command:
+
+    streamlit run validation\practical_scenarios.py [ARGUMENTS]
+2025-12-24 12:23:29.742 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-12-24 12:23:29.742 Thread 'MainThread': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-12-24 12:23:29.742 No runtime found, using MemoryCacheStorageManager
+2025-12-24 12:23:29.744 No runtime found, using MemoryCacheStorageManager
+2025-12-24 12:23:29.745 No runtime found, using MemoryCacheStorageManager
+2025-12-24 12:23:29.747 No runtime found, using MemoryCacheStorageManager
+2025-12-24 12:23:29.748 No runtime found, using MemoryCacheStorageManager
+
+================================================================================
+                    PRACTICAL SCENARIO VALIDATION
+================================================================================
+
+Real-world examples showing how the scoring system evaluates
+different market opportunities with practical interpretations.
+
+
+================================================================================
+Traceback (most recent call last):
+  File "C:\Users\loren\Research\polyMDash\validation\practical_scenarios.py", line 299, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\loren\Research\polyMDash\validation\practical_scenarios.py", line 61, in main
+        print_scenario(
+        ~~~~~~~~~~~~~~^
+            "\U0001f3af Scenario 1: The Ideal Trade Setup",
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<14 lines>...
+            params1
+            ^^^^^^^
+        )
+        ^
+  File "C:\Users\loren\Research\polyMDash\validation\practical_scenarios.py", line 18, in print_scenario
+    print(f"{title}")
+    ~~~~~^^^^^^^^^^^^
+  File "C:\Users\loren\miniconda3\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f3af' in position 0: character maps to <undefined>

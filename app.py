@@ -966,147 +966,247 @@ def calculate_opportunity_score(
     best_ask: float,
     direction: str,
     one_day_change: float = 0,
-    one_week_change: float = 0
+    one_week_change: float = 0,
+    annualized_yield: float = 0,
+    charm: float = 0
 ) -> dict:
     """
-    Calculate sophisticated opportunity score for "last mile" trades.
+    Multi-modal scoring function optimized for 2-5% distance, 7-10 day window sweet spot.
     
-    Combines multiple signals with dynamic weighting:
-    - Proximity to target (0% or 100%)
-    - Momentum strength and consistency
-    - Time urgency (theta decay)
-    - Spread quality
-    - Volume conviction
-    - Risk/reward ratio
+    Uses polynomial/sigmoid curves for smooth transitions instead of hard cutoffs.
+    Penalizes deviations from optimal conditions proportionally.
+    
+    Core metrics:
+    - Distance-Time fit (35%): Sweet spot at 2-5% distance, 7-10 days
+    - APY (25%): Logarithmic scale
+    - Volume (15%): Liquidity conviction
+    - Spread Quality (10%): Execution efficiency
+    - Momentum (10%): Directional strength
+    - Charm (5%): Acceleration factor
     
     Returns dict with total_score (0-100), grade, and components.
     """
     
-    # 1. PROXIMITY SCORE (0-100) - Exponential curve
+    # Calculate distance to target
     if direction == 'YES':
         distance_to_target = 1.0 - current_prob
     else:
         distance_to_target = current_prob
     
-    proximity_raw = 1.0 - distance_to_target
-    proximity_score = (proximity_raw ** 1.5) * 100
-    if distance_to_target <= 0.10:
-        proximity_score = min(100, proximity_score * 1.15)
+    days_to_expiry = hours_to_expiry / 24
     
-    # 2. MOMENTUM SCORE (0-100) with consistency bonus
+    # =================================================================
+    # 1. DISTANCE-TIME FIT SCORE (0-100) - 35% weight
+    # Multi-modal function with sweet spot at 2-5% distance, 7-10 days
+    # =================================================================
+    
+    # Distance component: Gaussian curve peaked at 3.5% (midpoint of 2-5%)
+    optimal_distance = 0.035  # 3.5%
+    distance_sigma = 0.015    # Controls width of optimal zone
+    
+    # Gaussian formula: exp(-((x - mu)^2) / (2 * sigma^2))
+    distance_deviation = (distance_to_target - optimal_distance) ** 2
+    distance_fitness = math.exp(-distance_deviation / (2 * distance_sigma ** 2))
+    
+    # Time component: Gaussian curve peaked at 8.5 days (midpoint of 7-10)
+    optimal_days = 8.5
+    time_sigma = 2.0  # Controls width of optimal zone
+    
+    time_deviation = (days_to_expiry - optimal_days) ** 2
+    time_fitness = math.exp(-time_deviation / (2 * time_sigma ** 2))
+    
+    # Combined distance-time fit with interaction term
+    # When both are optimal, score is maximized
+    distance_time_fit = distance_fitness * time_fitness
+    
+    # Boost for being in the exact sweet spot (2-5% distance AND 7-10 days)
+    in_sweet_spot = (0.02 <= distance_to_target <= 0.05) and (7 <= days_to_expiry <= 10)
+    if in_sweet_spot:
+        distance_time_fit = min(1.0, distance_time_fit * 1.3)
+    
+    # Polynomial penalty for extreme distances (too close to 0% or 100%)
+    # Sigmoid function to smoothly penalize distances < 1% or > 20%
+    if distance_to_target < 0.01:  # Very close to extreme
+        extreme_penalty = 1.0 / (1.0 + math.exp(10 * (distance_to_target - 0.005)))
+        distance_time_fit *= extreme_penalty
+    elif distance_to_target > 0.20:  # Too far from extreme
+        far_penalty = 1.0 / (1.0 + math.exp(-10 * (distance_to_target - 0.25)))
+        distance_time_fit *= far_penalty
+    
+    distance_time_score = distance_time_fit * 100
+    
+    # =================================================================
+    # 2. APY SCORE (0-100) - 25% weight
+    # Logarithmic scale with smooth transitions
+    # =================================================================
+    apy_decimal = annualized_yield
+    
+    if apy_decimal <= 0:
+        apy_score = 0
+    elif apy_decimal < 0.50:  # <50% APY
+        # Polynomial: x^0.7 for diminishing returns at low APY
+        apy_score = (apy_decimal / 0.50) ** 0.7 * 20
+    elif apy_decimal < 1.0:  # 50-100% APY
+        apy_score = 20 + ((apy_decimal - 0.50) / 0.50) ** 0.8 * 20
+    elif apy_decimal < 5.0:  # 100-500% APY
+        log_progress = math.log10(apy_decimal) / math.log10(5.0)
+        apy_score = 40 + log_progress * 30
+    elif apy_decimal < 10.0:  # 500-1000% APY
+        log_progress = (math.log10(apy_decimal) - math.log10(5.0)) / (math.log10(10.0) - math.log10(5.0))
+        apy_score = 70 + log_progress * 20
+    else:  # >1000% APY
+        log_progress = min(1.0, (math.log10(apy_decimal) - math.log10(10.0)) / 1.0)
+        apy_score = 85 + log_progress * 15
+    
+    apy_score = min(100, apy_score)
+    
+    # =================================================================
+    # 3. VOLUME SCORE (0-100) - 15% weight
+    # Smooth S-curve for liquidity assessment
+    # =================================================================
+    if volume <= 0:
+        volume_score = 0
+    else:
+        # S-curve (sigmoid): 1 / (1 + exp(-k * (x - midpoint)))
+        # Midpoint at 500k, inflection creates smooth transition
+        log_volume = math.log10(max(volume, 1))
+        
+        # Sigmoid centered at log10(500k) = 5.7
+        volume_midpoint = 5.7
+        volume_steepness = 1.5
+        
+        sigmoid = 1.0 / (1.0 + math.exp(-volume_steepness * (log_volume - volume_midpoint)))
+        volume_score = sigmoid * 100
+        
+        # Boost for very high volume (>2M)
+        if volume > 2_000_000:
+            volume_bonus = min(0.2, (volume - 2_000_000) / 10_000_000)
+            volume_score = min(100, volume_score * (1.0 + volume_bonus))
+    
+    volume_score = min(100, volume_score)
+    
+    # =================================================================
+    # 4. SPREAD QUALITY SCORE (0-100) - 10% weight
+    # Polynomial curve rewarding tight spreads
+    # =================================================================
+    if best_bid is not None and best_ask is not None and best_ask > 0 and best_bid > 0:
+        spread = best_ask - best_bid
+        spread_pct = spread / best_ask
+        
+        # Inverse polynomial: tighter spread = higher score
+        # Perfect spread (0%) = 100, 10% spread = ~0
+        if spread_pct <= 0:
+            spread_score = 100
+        else:
+            # Polynomial decay: (1 - (spread/0.10))^2 * 100
+            normalized_spread = min(spread_pct / 0.10, 1.0)
+            spread_score = ((1.0 - normalized_spread) ** 1.5) * 100
+    else:
+        spread_score = 30  # Default for missing spread data
+    
+    spread_score = max(0, min(100, spread_score))
+    
+    # =================================================================
+    # 5. MOMENTUM SCORE (0-100) - 10% weight
+    # With directional consistency bonus (polynomial)
+    # =================================================================
     momentum_score = momentum * 100
+    
+    # Consistency bonus using polynomial multiplier
     short_term_aligned = (direction == 'YES' and one_day_change > 0) or (direction == 'NO' and one_day_change < 0)
     long_term_aligned = (direction == 'YES' and one_week_change > 0) or (direction == 'NO' and one_week_change < 0)
     
+    # Track counter-trend risk for final penalty
+    is_counter_trend = False
+    
     if short_term_aligned and long_term_aligned:
-        momentum_score = min(100, momentum_score * 1.2)
-    elif not short_term_aligned and not long_term_aligned:
-        momentum_score *= 0.7
-    
-    # 3. URGENCY SCORE (0-100) - Sweet spot 2-24h
-    if hours_to_expiry <= 0:
-        urgency_score = 0
-    elif hours_to_expiry <= 2:
-        urgency_score = 85
-    elif hours_to_expiry <= 6:
-        urgency_score = 95 + (6 - hours_to_expiry) * 1
-    elif hours_to_expiry <= 24:
-        urgency_score = 70 + (24 - hours_to_expiry) / 18 * 25
-    elif hours_to_expiry <= 72:
-        urgency_score = 40 + (72 - hours_to_expiry) / 48 * 30
-    elif hours_to_expiry <= 168:
-        urgency_score = 20 + (168 - hours_to_expiry) / 96 * 20
+        # Both aligned: stronger polynomial boost
+        consistency_factor = 1.5  # Increased from 1.25
+        momentum_score = min(100, momentum_score * consistency_factor)
+    elif short_term_aligned or long_term_aligned:
+        # One aligned: neutral baseline (no boost/penalty to momentum itself)
+        consistency_factor = 1.0  # Changed from 1.1
+        momentum_score = min(100, momentum_score * consistency_factor)
     else:
-        urgency_score = max(5, 20 - (hours_to_expiry - 168) / 168 * 15)
+        # Neither aligned: stronger polynomial penalty + risk flag
+        consistency_factor = 0.5  # Increased penalty from 0.65
+        momentum_score *= consistency_factor
+        is_counter_trend = True  # Flag for additional overall penalty
     
-    # 4. SPREAD SCORE (0-100) - Tighter = better
-    if best_bid is not None and best_ask is not None and best_ask > 0:
-        spread = best_ask - best_bid
-        spread_pct = spread / best_ask
-        if spread_pct <= 0.01:
-            spread_score = 100
-        elif spread_pct <= 0.02:
-            spread_score = 90 + (0.02 - spread_pct) / 0.01 * 10
-        elif spread_pct <= 0.05:
-            spread_score = 60 + (0.05 - spread_pct) / 0.03 * 30
-        elif spread_pct <= 0.10:
-            spread_score = 30 + (0.10 - spread_pct) / 0.05 * 30
-        else:
-            spread_score = max(0, 30 - (spread_pct - 0.10) * 200)
-    else:
-        spread_score = 30
+    momentum_score = min(100, momentum_score)
     
-    # 5. VOLUME SCORE (0-100) - Log scale
-    if volume > 0:
-        volume_log = math.log10(max(volume, 1))
-        volume_score = min(100, max(0, (volume_log - 2) * 20 + 30))
-    else:
-        volume_score = 10
+    # =================================================================
+    # 6. CHARM SCORE (0-100) - 5% weight
+    # Polynomial scaling for acceleration
+    # =================================================================
+    abs_charm = abs(charm)
     
-    # 6. RISK/REWARD SCORE (0-100)
-    if direction == 'YES':
-        entry_price = best_ask if best_ask is not None else current_prob
-        potential_profit = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-    else:
-        entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - current_prob)
-        potential_profit = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+    if abs_charm <= 0:
+        charm_score = 0
+    elif abs_charm < 2.0:  # <2pp/day
+        # Quadratic growth for low charm
+        charm_score = (abs_charm / 2.0) ** 2 * 40
+    elif abs_charm < 5.0:  # 2-5pp/day
+        charm_score = 40 + ((abs_charm - 2.0) / 3.0) ** 1.5 * 30
+    elif abs_charm < 10.0:  # 5-10pp/day
+        charm_score = 70 + ((abs_charm - 5.0) / 5.0) ** 1.2 * 20
+    else:  # >10pp/day
+        # Logarithmic for extreme charm (diminishing returns)
+        log_charm = min(1.0, math.log10(abs_charm - 9) / 1.0)
+        charm_score = 90 + log_charm * 10
     
-    if potential_profit <= 0:
-        rr_score = 0
-    elif potential_profit <= 0.05:
-        rr_score = potential_profit / 0.05 * 50
-    elif potential_profit <= 0.10:
-        rr_score = 50 + (potential_profit - 0.05) / 0.05 * 20
-    elif potential_profit <= 0.20:
-        rr_score = 70 + (potential_profit - 0.10) / 0.10 * 15
-    elif potential_profit <= 0.50:
-        rr_score = 85 + (potential_profit - 0.20) / 0.30 * 10
-    else:
-        rr_score = min(100, 95 + (potential_profit - 0.50) * 10)
+    charm_score = min(100, charm_score)
     
-    # 7. CONFIDENCE MULTIPLIER
-    confidence = 1.0
-    if proximity_raw > 0.90 and momentum > 0.25:
-        confidence *= 1.10
-    if short_term_aligned and long_term_aligned:
-        confidence *= 1.05
-    if volume > 100000 and momentum > 0.20:
-        confidence *= 1.05
-    if spread_score > 80:
-        confidence *= 1.03
-    if proximity_raw > 0.85 and momentum < 0.10:
-        confidence *= 0.85
-    
-    # 8. DYNAMIC WEIGHTING
-    w_proximity = 0.25
-    w_momentum = 0.20
-    w_urgency = 0.20
+    # =================================================================
+    # 7. DYNAMIC WEIGHTING based on context
+    # Smooth transitions instead of hard cutoffs
+    # =================================================================
+    w_distance_time = 0.35
+    w_apy = 0.25
+    w_volume = 0.15
     w_spread = 0.10
-    w_volume = 0.10
-    w_rr = 0.15
+    w_momentum = 0.10
+    w_charm = 0.05
     
-    if hours_to_expiry <= 24:
-        w_urgency += 0.05
-        w_volume -= 0.05
-    if distance_to_target > 0.15:
-        w_momentum += 0.05
-        w_proximity -= 0.05
-    if spread_score < 50:
-        w_spread += 0.05
-        w_rr -= 0.05
+    # Adjust weights based on time horizon (smooth sigmoid)
+    if days_to_expiry < 3:  # Very short-term
+        # Increase spread and charm importance
+        shift = min(0.08, (3 - days_to_expiry) / 10)
+        w_spread += shift / 2
+        w_charm += shift / 2
+        w_apy -= shift
+    elif days_to_expiry > 14:  # Long-term
+        # Increase volume importance
+        shift = min(0.08, (days_to_expiry - 14) / 30)
+        w_volume += shift
+        w_distance_time -= shift
     
-    # 9. FINAL SCORE
+    # Adjust based on distance from sweet spot (polynomial)
+    distance_from_sweet_spot = abs(distance_to_target - optimal_distance) / optimal_distance
+    if distance_from_sweet_spot > 0.5:
+        # Far from sweet spot: APY matters more
+        shift = min(0.10, distance_from_sweet_spot * 0.15)
+        w_apy += shift
+        w_distance_time -= shift
+    
+    # =================================================================
+    # 8. FINAL SCORE - Weighted combination
+    # No hard penalties, all handled by smooth component scores
+    # =================================================================
     raw_score = (
-        proximity_score * w_proximity +
-        momentum_score * w_momentum +
-        urgency_score * w_urgency +
-        spread_score * w_spread +
+        distance_time_score * w_distance_time +
+        apy_score * w_apy +
         volume_score * w_volume +
-        rr_score * w_rr
+        spread_score * w_spread +
+        momentum_score * w_momentum +
+        charm_score * w_charm
     )
-    final_score = min(100, raw_score * confidence)
     
-    # 10. GRADE
+    final_score = min(100, max(0, raw_score))
+    
+    # =================================================================
+    # 9. GRADE based on final score
+    # =================================================================
     if final_score >= 85:
         grade, grade_color = "A+", "#27ae60"
     elif final_score >= 75:
@@ -1127,15 +1227,16 @@ def calculate_opportunity_score(
         'grade': grade,
         'grade_color': grade_color,
         'components': {
-            'proximity': proximity_score,
-            'momentum': momentum_score,
-            'urgency': urgency_score,
-            'spread': spread_score,
+            'distance_time_fit': distance_time_score,
+            'apy': apy_score,
             'volume': volume_score,
-            'risk_reward': rr_score
+            'spread': spread_score,
+            'momentum': momentum_score,
+            'charm': charm_score
         },
-        'confidence': confidence,
-        'potential_profit': potential_profit
+        'distance_to_target': distance_to_target,
+        'days_to_expiry': days_to_expiry,
+        'in_sweet_spot': in_sweet_spot
     }
 
 
@@ -1174,6 +1275,19 @@ def render_pullback_hunter():
             value=25, 
             step=5,
             help="Show markets from 0-X% and (100-X)-100%. Ex: 25% shows 0-25% and 75-100%"
+        ) / 100.0  # Convert to decimal
+        
+        # min_distance must be <= min_extremity (can't exclude more than we're showing)
+        min_extremity_pct = min_extremity * 100  # Convert back to percentage for slider
+        min_distance_default = min(1.5, min_extremity_pct)
+        
+        min_distance = st.slider(
+            "Min Distance from Extreme (%)",
+            min_value=0.0,
+            max_value=min_extremity_pct,
+            value=min_distance_default,
+            step=0.5,
+            help=f"Minimum distance from 0% or 100%. Must be ≤ {min_extremity_pct:.0f}% (max extremity). Excludes markets too close to resolution."
         ) / 100.0  # Convert to decimal
         
         momentum_window_hours = st.select_slider(
@@ -1272,7 +1386,7 @@ def render_pullback_hunter():
                 
                 # Fresh scan
                 logger.info("🔄 Starting fresh market scan...")
-                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum, min_volume)
+                opportunities = scan_pullback_markets(max_expiry_hours, min_extremity, limit, debug_mode, momentum_window_hours, min_momentum, min_volume, min_distance)
                 
                 # Store with version tag to invalidate old data
                 st.session_state['opportunities'] = opportunities
@@ -1309,7 +1423,7 @@ def render_pullback_hunter():
             st.warning("No opportunities found. Try adjusting filters.")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15, min_volume: float = 500_000) -> List[Dict]:
+def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15, min_volume: float = 500_000, min_distance: float = 0.015) -> List[Dict]:
     """Scan markets for momentum opportunities toward extremes."""
     
     async def fetch():
@@ -1523,6 +1637,19 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         # Multi-outcome: treat as YES for this outcome
                         direction = 'YES'
                     
+                    # Apply min_distance filter to avoid markets too close to extremes (0% or 100%)
+                    # This prevents trading markets that are about to resolve
+                    if direction == 'YES':
+                        # For YES direction, price should be < (1.0 - min_distance)
+                        # Example: if min_distance = 1.5%, price must be < 98.5%
+                        if yes_price >= (1.0 - min_distance):
+                            continue
+                    else:  # NO direction
+                        # For NO direction, price should be > min_distance
+                        # Example: if min_distance = 1.5%, price must be > 1.5%
+                        if yes_price <= min_distance:
+                            continue
+                    
                     # Calculate composite momentum
                     momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
                     momentum = momentum_data['signal_strength']
@@ -1554,7 +1681,17 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                     else:
                         annualized_yield = 0
                     
-                    # Calculate score
+                    # Calculate Charm (delta decay rate) BEFORE score calculation
+                    # Charm = -∂Δ/∂τ measures how momentum changes per day
+                    # Positive charm = momentum accelerating, Negative = decelerating
+                    if days_to_expiry > 0:
+                        # Charm approximation: momentum change rate per day
+                        # Higher absolute charm = faster momentum acceleration/deceleration
+                        charm = (momentum * 100) / days_to_expiry  # Percentage points per day
+                    else:
+                        charm = 0
+                    
+                    # Calculate score with APY and Charm
                     score_data = calculate_opportunity_score(
                         current_prob=yes_price,
                         momentum=momentum,
@@ -1564,18 +1701,10 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         best_ask=best_ask,
                         direction=direction,
                         one_day_change=one_day_change,
-                        one_week_change=one_week_change
+                        one_week_change=one_week_change,
+                        annualized_yield=annualized_yield,
+                        charm=charm
                     )
-                    
-                    # Calculate Charm (delta decay rate)
-                    # Charm = -∂Δ/∂τ measures how momentum changes per day
-                    # Positive charm = momentum accelerating, Negative = decelerating
-                    if days_to_expiry > 0:
-                        # Charm approximation: momentum change rate per day
-                        # Higher absolute charm = faster momentum acceleration/deceleration
-                        charm = (momentum * 100) / days_to_expiry  # Percentage points per day
-                    else:
-                        charm = 0
                     
                     # Format display question
                     if is_binary:
@@ -1594,85 +1723,6 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'volume_24h': volume,
                         'momentum': momentum,
                         'charm': charm,
-                        'score': score_data['total_score'],
-                        'grade': score_data['grade'],
-                        'direction': direction,
-                        'annualized_yield': annualized_yield,
-                        'best_bid': best_bid,
-                        'best_ask': best_ask
-                    })
-                    
-                    # Get volume
-                    volume = float(market.get('volume') or 0)
-                    
-                    # Direction already determined above based on probability threshold
-                    # YES if yes_price >= 0.75, NO if yes_price <= 0.25
-                    
-                    # Calculate annualized yield using ask/bid prices
-                    if is_binary:
-                        # Binary: For YES buy at ask, for NO sell YES at bid
-                        if direction == 'YES':
-                            entry_price = best_ask if best_ask is not None else yes_price
-                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-                        else:
-                            # NO direction: entry price is (1 - bestBid) for YES
-                            entry_price = (1.0 - best_bid) if best_bid is not None else (1.0 - yes_price)
-                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
-                    else:
-                        # Multi-outcome: buy this specific outcome at ask price
-                        entry_price = best_ask if best_ask is not None else yes_price
-                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-                    
-                    days_in_year = 365
-                    days_to_expiry = hours_to_expiry / 24 if hours_to_expiry > 0 else 0
-                    
-                    # Calculate APY with overflow protection
-                    if days_to_expiry > 0.1:  # At least 2.4 hours
-                        exponent = days_in_year / days_to_expiry
-                        # Cap exponent to prevent overflow (max 1000x annualization)
-                        if exponent > 1000:
-                            annualized_yield = 0  # Too short timeframe, not meaningful
-                        else:
-                            try:
-                                annualized_yield = ((1 + profit_if_win) ** exponent) - 1
-                            except (OverflowError, ValueError):
-                                annualized_yield = 0
-                    else:
-                        annualized_yield = 0
-                    
-                    # Calculate advanced opportunity score
-                    score_data = calculate_opportunity_score(
-                        current_prob=yes_price,
-                        momentum=momentum,
-                        hours_to_expiry=hours_to_expiry,
-                        volume=volume,
-                        best_bid=best_bid,
-                        best_ask=best_ask,
-                        direction=direction,
-                        one_day_change=one_day_change,
-                        one_week_change=one_week_change
-                    )
-                    
-                    # Format question with outcome name for multi-outcome markets
-                    # Binary markets (Yes/No): No brackets
-                    # Multi-outcome markets: ALWAYS show [outcome] brackets
-                    if is_binary:
-                        display_question = parent_question
-                    else:
-                        # Multi-outcome: Always show outcome in brackets
-                        display_question = f"{parent_question} [{outcome_name}]"
-                    
-                    # VALIDATION: For binary markets, current_prob should be YES price (index 0)
-                    # If is_binary and yes_price > 0.5, that's suspicious (most extreme markets are <15% or >85%)
-                    opportunities.append({
-                        'question': display_question,
-                        'slug': market_slug,
-                        'url': market_url,
-                        'current_prob': yes_price,
-                        'hours_to_expiry': hours_to_expiry,
-                        'end_date': end_dt,
-                        'volume_24h': volume,
-                        'momentum': momentum,
                         'score': score_data['total_score'],
                         'grade': score_data['grade'],
                         'direction': direction,
