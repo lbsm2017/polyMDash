@@ -37,11 +37,11 @@ final_score = conviction × consensus_multiplier
 ```
 
 ### Conviction Levels
-- 🔥 **EXTREME** (>50): Multiple users, large positions, extreme prices
-- 💎 **HIGH** (>20): Strong signals with consensus
-- 📈 **MODERATE** (>10): Notable activity
-- 👀 **LOW** (>5): Weak signals
-- 💤 **MINIMAL** (<5): Minimal conviction
+- EXTREME (>50): Multiple users, large positions, extreme prices
+- HIGH (>20): Strong signals with consensus
+- MODERATE (>10): Notable activity
+- LOW (>5): Weak signals
+- MINIMAL (<5): Minimal conviction
 
 ## Dashboard Features
 
@@ -52,18 +52,18 @@ final_score = conviction × consensus_multiplier
 
 ### Market Cards Display
 Each card shows:
-- ✅ Market question (slug)
-- 📊 Current YES/NO prices (from Gamma API)
-- 👥 Consensus count & trader chips
-- 🎯 Conviction level badge
-- 💰 Volume breakdown (bullish/bearish)
-- 📋 Expandable trade list
+- Market question (slug)
+- Current YES/NO prices (from Gamma API)
+- Consensus count & trader chips
+- Conviction level badge
+- Volume breakdown (bullish/bearish)
+- Expandable trade list
 
 ### Summary Metrics
-- 🎯 Total signals matching filters
-- 📈 Bullish markets count
-- 📉 Bearish markets count  
-- 💰 Total volume across all markets
+- Total signals matching filters
+- Bullish markets count
+- Bearish markets count
+- Total volume across all markets
 
 ## Data Flow
 

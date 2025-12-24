@@ -26,8 +26,8 @@ def print_scenario(title, description, result, params):
     print(f"  Bid/Ask: {params['best_bid']:.3f} / {params['best_ask']:.3f}")
     print(f"  APY: {params['annualized_yield']:.1f}%")
     
-    print(f"\n📊 SCORE: {result['total_score']:.1f}/100 | Grade: {result['grade']}")
-    print(f"   Sweet Spot: {'✅ YES' if result['in_sweet_spot'] else '❌ NO'}")
+    print(f"\nSCORE: {result['total_score']:.1f}/100 | Grade: {result['grade']}")
+    print(f"   Sweet Spot: {'YES' if result['in_sweet_spot'] else 'NO'}")
     
     print(f"\n   Component Scores:")
     for comp, score in result['components'].items():
@@ -69,7 +69,7 @@ You find a market at 96.5% probability with 8.5 days to expiry.
 - Healthy charm (9 pp/day acceleration)
 - Good APY (450%)
 
-💡 INTERPRETATION: This is exactly what the system looks for.
+INTERPRETATION: This is exactly what the system looks for.
    Perfect distance-time fit + strong fundamentals = Top grade.
    This is a STRONG BUY signal.
         """,
@@ -103,7 +103,7 @@ You find a market at 99.3% probability with 5 days to expiry.
 - Very strong momentum and charm
 - But limited upside potential
 
-💡 INTERPRETATION: Despite perfect fundamentals, proximity to
+INTERPRETATION: Despite perfect fundamentals, proximity to
    extreme severely limits profit potential. The system correctly
    penalizes this - it's not worth the risk/reward.
    This is a PASS.
@@ -137,7 +137,7 @@ You find a market at 80% probability with 25 days to expiry.
 - Good liquidity and spread
 - Moderate fundamentals
 
-💡 INTERPRETATION: Too far from the extreme and too long to expiry.
+INTERPRETATION: Too far from the extreme and too long to expiry.
    While fundamentals are decent, this isn't the optimal setup.
    The system wants 2-5% distance in 7-10 days, not this.
    This is a MAYBE - consider but not priority.
@@ -171,7 +171,7 @@ You find a market at 97% probability with 9 days to expiry.
 - Moderate spread (2%)
 - Good fundamentals otherwise
 
-💡 INTERPRETATION: Great positioning but liquidity concerns.
+INTERPRETATION: Great positioning but liquidity concerns.
    The system still scores this well because the opportunity
    quality is high - but YOU need to decide if you can trade
    the size you want. For small trades, this is good.
@@ -207,7 +207,7 @@ You find a market at 96% probability expiring in 1.5 days.
 - Very high APY (2500%) due to short time
 - Good liquidity
 
-💡 INTERPRETATION: This is a fast-moving momentum play, not
+INTERPRETATION: This is a fast-moving momentum play, not
    the sweet spot trade. The system penalizes short expiry
    because it prefers 7-10 day setups with less urgency.
    If you like short-term scalps, this could work, but it's
@@ -243,7 +243,7 @@ You find a market at 96.5% probability with 8 days to expiry.
 - BUT momentum is AGAINST the direction (both 1d/7d negative)
 - Market has been declining despite high probability
 
-💡 INTERPRETATION: Perfect positioning but momentum misalignment
+INTERPRETATION: Perfect positioning but momentum misalignment
    is a red flag. The market might be topping out or traders
    are taking profits. The system reduces the momentum component
    score significantly (0.65x multiplier vs 1.25x for alignment).
@@ -291,7 +291,7 @@ You find a market at 96.5% probability with 8 days to expiry.
     """)
     
     print("="*80)
-    print(" "*20 + "✅ VALIDATION COMPLETE")
+    print(" "*20 + "VALIDATION COMPLETE")
     print("="*80)
 
 

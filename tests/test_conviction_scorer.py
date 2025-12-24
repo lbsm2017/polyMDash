@@ -590,20 +590,20 @@ class TestEdgeCases:
         
         level, emoji = scorer.get_conviction_level(150)
         assert "EXTREME" in level
-        assert emoji == "🔥"
+        assert emoji == "[EXTREME]"
         
         level, emoji = scorer.get_conviction_level(70)
         assert "HIGH" in level
-        assert emoji == "💎"
+        assert emoji == "[HIGH]"
         
         level, emoji = scorer.get_conviction_level(40)
         assert "MODERATE" in level
-        assert emoji == "📈"
+        assert emoji == "[MODERATE]"
         
         level, emoji = scorer.get_conviction_level(15)
         assert "LOW" in level
-        assert emoji == "👀"
+        assert emoji == "[LOW]"
         
         level, emoji = scorer.get_conviction_level(5)
         assert "MINIMAL" in level
-        assert emoji == "💤"
+        assert emoji == "[MINIMAL]"

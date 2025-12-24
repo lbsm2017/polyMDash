@@ -44,11 +44,11 @@ python validation/test_scoring_validation.py
 **Expected Output:**
 ```
 Total Tests Run: 114
-✅ Total Passed: 114
-❌ Total Failed: 0
-⚠️  Total Warnings: 0
+Total Passed: 114
+Total Failed: 0
+Total Warnings: 0
 
-🎉 ALL VALIDATION TESTS PASSED!
+ALL VALIDATION TESTS PASSED!
 ```
 
 ### practical_scenarios.py
@@ -56,12 +56,12 @@ Total Tests Run: 114
 Real-world scenario demonstrations with practical trading interpretations:
 
 **Six Practical Examples:**
-1. 🎯 The Ideal Trade Setup (Score: ~81) - Perfect sweet spot
-2. ⚠️  Too Close for Comfort (Score: ~53) - 0.7% from extreme
-3. 📉 The Long Shot (Score: ~48) - 20% distance, 25 days
-4. 💎 Low Liquidity Gem (Score: ~69) - Sweet spot but low volume
-5. ⚡ The Sprint (Score: ~53) - 1.5 day expiry
-6. 🔄 Counter-Trend Setup (Score: ~74) - Misaligned momentum
+1. The Ideal Trade Setup (Score: ~81) - Perfect sweet spot
+2. Too Close for Comfort (Score: ~53) - 0.7% from extreme
+3. The Long Shot (Score: ~48) - 20% distance, 25 days
+4. Low Liquidity Gem (Score: ~69) - Sweet spot but low volume
+5. The Sprint (Score: ~53) - 1.5 day expiry
+6. Counter-Trend Setup (Score: ~74) - Misaligned momentum
 
 **Each scenario includes:**
 - Market setup details
@@ -216,7 +216,7 @@ python validation/quick_validation.py
 Realistic Scenarios:  6/6 passed
 Edge Cases:           8/8 passed
 Randomized Tests:     50/50 passed
-Comparative Analysis: ✅ All assertions passed
+Comparative Analysis: All assertions passed
 TOTAL:                64/64 passed
 ```
 
@@ -243,8 +243,8 @@ python validation/test_scoring_validation.py && python validation/practical_scen
 
 ## Interpreting Results
 
-**All tests passing:** Scoring system behaves as designed  
-**Failed realistic scenarios:** Expected ranges need adjustment or scoring logic issue  
-**Failed edge cases:** Boundary conditions not handled properly  
-**Failed randomized tests:** Crashes or invalid score ranges  
+**All tests passing:** Scoring system behaves as designed
+**Failed realistic scenarios:** Expected ranges need adjustment or scoring logic issue
+**Failed edge cases:** Boundary conditions not handled properly
+**Failed randomized tests:** Crashes or invalid score ranges
 **Failed comparative:** Score changes not directionally correct

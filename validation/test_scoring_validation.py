@@ -108,9 +108,9 @@ class ScoringValidator:
         print("VALIDATION SUMMARY")
         print("="*80)
         print(f"Total Tests: {self.passed + self.failed}")
-        print(f"✅ Passed: {self.passed}")
-        print(f"❌ Failed: {self.failed}")
-        print(f"⚠️  Warnings: {self.warnings}")
+        print(f"Passed: {self.passed}")
+        print(f"Failed: {self.failed}")
+        print(f"Warnings: {self.warnings}")
         print("="*80)
         
         # Print failures
@@ -118,7 +118,7 @@ class ScoringValidator:
             print("\nFAILURES:")
             for r in self.results:
                 if r['status'] in ['FAIL', 'ERROR']:
-                    print(f"\n❌ {r['name']}")
+                    print(f"\n[FAIL] {r['name']}")
                     print(f"   Reason: {r['reason']}")
                     if 'result' in r:
                         print(f"   Score: {r['result']['total_score']:.2f}")
@@ -128,7 +128,7 @@ class ScoringValidator:
             print("\nWARNINGS:")
             for r in self.results:
                 if r['status'] == 'WARNING':
-                    print(f"\n⚠️  {r['name']}")
+                    print(f"\n[WARNING] {r['name']}")
                     print(f"   Reason: {r['reason']}")
 
 
@@ -651,7 +651,7 @@ def run_comparative_analysis():
     print(f"   Δ Score: {result_long['total_score'] - base_result['total_score']:.2f}")
     # Longer time away from sweet spot should decrease score
     
-    print("\n✅ All comparative assertions passed!")
+    print("\nAll comparative assertions passed!")
 
 
 def main():
@@ -679,15 +679,15 @@ def main():
     print("OVERALL VALIDATION RESULTS")
     print("="*80)
     print(f"Total Tests Run: {total_passed + total_failed}")
-    print(f"✅ Total Passed: {total_passed}")
-    print(f"❌ Total Failed: {total_failed}")
-    print(f"⚠️  Total Warnings: {total_warnings}")
+    print(f"Total Passed: {total_passed}")
+    print(f"Total Failed: {total_failed}")
+    print(f"Total Warnings: {total_warnings}")
     
     if total_failed == 0:
-        print("\n🎉 ALL VALIDATION TESTS PASSED!")
+        print("\nALL VALIDATION TESTS PASSED!")
         return 0
     else:
-        print(f"\n⚠️  {total_failed} tests failed. Review failures above.")
+        print(f"\n{total_failed} tests failed. Review failures above.")
         return 1
 
 

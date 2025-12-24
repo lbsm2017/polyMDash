@@ -21,13 +21,13 @@ def test_scenario(name, params, expected_behavior):
     print(f"Prob: {params['current_prob']:.1%} | Distance: {result['distance_to_target']*100:.1f}% | Days: {result['days_to_expiry']:.1f}")
     print(f"Volume: ${params['volume']:,} | Spread: {((params['best_ask']-params['best_bid'])/params['current_prob']*100):.2f}%")
     print(f"Momentum: {params['momentum']:.2f} | APY: {params['annualized_yield']:.1f}% | Charm: {params['charm']:.1f}")
-    print(f"\n📊 SCORE: {score:.1f}/100 | Grade: {result['grade']} | Sweet Spot: {result['in_sweet_spot']}")
+    print(f"\nSCORE: {score:.1f}/100 | Grade: {result['grade']} | Sweet Spot: {result['in_sweet_spot']}")
     
     print(f"\nComponents:")
     for comp, val in result['components'].items():
         print(f"  {comp:20s}: {val:6.2f}")
     
-    print(f"\n💡 Expected: {expected_behavior}")
+    print(f"\nExpected: {expected_behavior}")
     
     return result
 
@@ -233,9 +233,9 @@ def main():
     momentum_diff = both_aligned - both_misaligned
     
     if momentum_diff < 3:
-        issues.append(f"❌ Momentum alignment impact too low! Only {momentum_diff:.1f} points difference")
+        issues.append(f"Momentum alignment impact too low! Only {momentum_diff:.1f} points difference")
     else:
-        print(f"\n✅ Momentum alignment impact: {momentum_diff:.1f} points")
+        print(f"\nMomentum alignment impact: {momentum_diff:.1f} points")
     
     # Test 6: SPREAD QUALITY
     print("\n\n" + "="*80)
@@ -277,7 +277,7 @@ def main():
         for issue in issues:
             print(issue)
     else:
-        print("✅ No major issues identified - scoring appears sensible")
+        print("No major issues identified - scoring appears sensible")
     
     # RECOMMENDATIONS
     print("\n\n" + "="*80)

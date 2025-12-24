@@ -36,15 +36,15 @@ def main():
     print(f"Realistic Scenarios:  {realistic.passed}/{realistic.passed + realistic.failed} passed")
     print(f"Edge Cases:           {edges.passed}/{edges.passed + edges.failed} passed")
     print(f"Randomized Tests:     {randomized.passed}/{randomized.passed + randomized.failed} passed")
-    print(f"Comparative Analysis: ✅ All assertions passed")
+    print(f"Comparative Analysis: All assertions passed")
     print("-"*80)
     print(f"TOTAL:                {total_passed}/{total_passed + total_failed} passed")
     
     if total_failed == 0:
-        print("\n✅ System validated - all tests passed!")
+        print("\nSystem validated - all tests passed!")
         return 0
     else:
-        print(f"\n⚠️  {total_failed} failures detected")
+        print(f"\n{total_failed} failures detected")
         return 1
 
 

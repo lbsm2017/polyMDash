@@ -82,7 +82,7 @@ python validation/rigorous_testing.py
 - 100 randomized tests with random parameters
 - 5 comparative analysis assertions
 
-**Expected Output:** ✅ All 114 tests pass
+**Expected Output:** All 114 tests pass
 
 ### quick_validation.py (64 tests)
 **Purpose:** Fast smoke test for rapid feedback
@@ -93,7 +93,7 @@ python validation/rigorous_testing.py
 - 50 randomized tests (reduced for speed)
 - Comparative analysis
 
-**Expected Output:** ✅ All 64 tests pass (~10 seconds)
+**Expected Output:** All 64 tests pass (~10 seconds)
 
 ### practical_scenarios.py
 **Purpose:** Real-world trading scenario demonstrations
@@ -123,18 +123,18 @@ python validation/rigorous_testing.py
 
 ## What Each Test Validates
 
-### Sweet Spot Detection ✅
+### Sweet Spot Detection
 - 2-5% distance AND 7-10 days = highest scoring
 - Smooth transitions, no hard cutoffs
 - Peak at 3.5% distance, 8.5 days
 
-### Momentum Alignment (Fine-Tuned) ✅
+### Momentum Alignment (Fine-Tuned)
 - Both aligned: 1.5x multiplier → ~6 point boost vs counter-trend
 - One aligned: 1.0x multiplier → neutral
 - Neither aligned: 0.5x multiplier + 5% risk penalty → ~6.6 point penalty
 - **Improvement:** 269% stronger impact (was 1.8 pts, now 6.6 pts)
 
-### Component Weights ✅
+### Component Weights
 - Distance-Time Fit: 35% (dominant factor)
 - APY: 25%
 - Volume: 15%
@@ -142,7 +142,7 @@ python validation/rigorous_testing.py
 - Momentum: 10%
 - Charm: 5%
 
-### Score Ranges ✅
+### Score Ranges
 - 85-100: A+/A (Strong opportunities)
 - 70-84: A/B+ (Good opportunities)
 - 55-69: B/C+ (Fair opportunities)
@@ -152,9 +152,9 @@ python validation/rigorous_testing.py
 
 ### GitHub Status Checks
 All validation workflows must pass for:
-- ✅ Merging PRs to main/develop
-- ✅ Deploying changes
-- ✅ Releasing new versions
+- Merging PRs to main/develop
+- Deploying changes
+- Releasing new versions
 
 ### Artifact Collection
 All workflows save results as GitHub artifacts for:

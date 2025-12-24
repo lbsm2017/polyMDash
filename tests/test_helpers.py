@@ -148,13 +148,13 @@ class TestHelpers:
     def test_get_market_status_emoji(self):
         """Test market status emoji."""
         closed_market = {"closed": True}
-        assert get_market_status_emoji(closed_market) == "🔒"
+        assert get_market_status_emoji(closed_market) == "[CLOSED]"
         
         active_market = {"active": True, "closed": False}
-        assert get_market_status_emoji(active_market) == "🟢"
+        assert get_market_status_emoji(active_market) == "[ACTIVE]"
         
         inactive_market = {"active": False, "closed": False}
-        assert get_market_status_emoji(inactive_market) == "⚫"
+        assert get_market_status_emoji(inactive_market) == "[INACTIVE]"
     
     def test_format_large_number(self):
         """Test large number formatting."""
