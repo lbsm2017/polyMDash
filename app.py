@@ -1458,9 +1458,9 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
         # Log sample
         if len(markets) >= 5:
             sample_questions = [m.get('question', 'N/A')[:50] for m in markets[:5]]
-                logger.info(f"Sample markets: {sample_questions}")
-            
-            filtered = markets  # Already filtered for crypto
+            logger.info(f"Sample markets: {sample_questions}")
+        
+        filtered = markets  # Already filtered for crypto
             
             if debug_mode:
                 logger.info(f"Debug mode: Processing {len(filtered)} non-crypto markets")
