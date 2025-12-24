@@ -1202,7 +1202,14 @@ def calculate_opportunity_score(
         charm_score * w_charm
     )
     
-    final_score = min(100, max(0, raw_score))
+    # Apply counter-trend risk penalty if momentum is misaligned
+    # This creates additional ~5% penalty beyond the momentum component reduction
+    if is_counter_trend:
+        risk_penalty = 0.95  # 5% overall reduction for counter-trend setups
+    else:
+        risk_penalty = 1.0
+    
+    final_score = min(100, max(0, raw_score * risk_penalty))
     
     # =================================================================
     # 9. GRADE based on final score

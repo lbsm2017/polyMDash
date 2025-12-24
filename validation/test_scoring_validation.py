@@ -301,10 +301,10 @@ def run_realistic_scenarios():
             'charm': 6.0
         },
         {
-            'min_score': 50,
-            'max_score': 75,  # Lower than aligned momentum
+            'min_score': 65,
+            'max_score': 72,  # Updated: Now includes 5% risk penalty + stronger component penalty
             'components': {
-                'momentum': (10, 30)  # Should be penalized
+                'momentum': (10, 15)  # Stronger penalty: 0.5x multiplier
             }
         }
     )
