@@ -14,7 +14,7 @@ If you discover a security vulnerability in Polymarket Dashboard, please report 
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please report security vulnerabilities by emailing the maintainers at [INSERT EMAIL ADDRESS] or through our [security advisory form](https://github.com/your-username/polymarket-dashboard/security/advisories/new) if available.
+Instead, please report security vulnerabilities by PM the maintainers or through our [security advisory form](https://github.com/your-username/polymarket-dashboard/security/advisories/new) if available.
 
 ### What to Include
 
