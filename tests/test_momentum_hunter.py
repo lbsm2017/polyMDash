@@ -468,6 +468,179 @@ class TestMomentumHunter:
         else:
             apy_class = "score-c"
         assert apy_class == "score-c", "APY <50% should be blue"
+    
+    def test_min_distance_to_extreme(self):
+        """Test minimum distance to extreme filter."""
+        min_distance = 0.015  # 1.5% default
+        
+        # Test YES direction (probability >= 0.5)
+        # Should PASS: 85% is 15% from 100%
+        yes_price = 0.85
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.15) < 0.0001, "Expected 0.15 distance"
+        assert distance_to_extreme >= min_distance, "85% should pass 1.5% min distance"
+        
+        # Should FAIL: 99% is 1% from 100%
+        yes_price = 0.99
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.01) < 0.0001, "Expected 0.01 distance"
+        assert distance_to_extreme < min_distance, "99% should fail 1.5% min distance"
+        
+        # Edge case: exactly at threshold (98.5%)
+        yes_price = 0.985
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.015) < 0.0001, "Expected 0.015 distance"
+        assert distance_to_extreme >= min_distance, "98.5% should pass (inclusive)"
+        
+        # Test NO direction (probability < 0.5)
+        # Should PASS: 25% is 25% from 0%
+        yes_price = 0.25
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.25) < 0.0001, "Expected 0.25 distance"
+        assert distance_to_extreme >= min_distance, "25% should pass 1.5% min distance"
+        
+        # Should FAIL: 1% is 1% from 0%
+        yes_price = 0.01
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.01) < 0.0001, "Expected 0.01 distance"
+        assert distance_to_extreme < min_distance, "1% should fail 1.5% min distance"
+    
+    def test_max_extremity_filter(self):
+        """Test maximum extremity filter (markets must be extreme enough)."""
+        min_extremity = 0.25  # Must be >75% or <25%
+        
+        # Test YES markets
+        yes_price = 0.85
+        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
+        assert is_extreme, "85% should be extreme enough"
+        
+        yes_price = 0.55
+        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
+        assert not is_extreme, "55% should not be extreme enough"
+        
+        # Test NO markets
+        yes_price = 0.20
+        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
+        assert is_extreme, "20% should be extreme enough"
+        
+        yes_price = 0.45
+        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
+        assert not is_extreme, "45% should not be extreme enough"
+    
+    def test_distance_filter_edge_cases(self):
+        """Test edge cases for distance filtering."""
+        # Exactly at 100%
+        yes_price = 1.0
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert distance_to_extreme == 0.0, "100% should have 0 distance"
+        
+        # Exactly at 0%
+        yes_price = 0.0
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert distance_to_extreme == 0.0, "0% should have 0 distance"
+        
+        # Exactly at 50%
+        yes_price = 0.5
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert direction == 'YES', "50% should be YES direction"
+        assert distance_to_extreme == 0.5, "50% should have 50% distance to 100%"
+        
+        # Very close to 100%
+        yes_price = 0.999
+        direction = 'YES' if yes_price >= 0.5 else 'NO'
+        distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+        assert abs(distance_to_extreme - 0.001) < 0.0001, "99.9% distance check"
+    
+    def test_distance_range_validation(self):
+        """Test various min distance values (0-10%)."""
+        test_cases = [
+            (0.00, 1.0, True),     # 0% threshold passes everything
+            (0.01, 0.99, True),    # 1% distance, 1% threshold
+            (0.01, 0.995, False),  # 0.5% distance, 1% threshold
+            (0.02, 0.98, True),    # 2% distance, 2% threshold
+            (0.05, 0.95, True),    # 5% distance, 5% threshold
+            (0.05, 0.97, False),   # 3% distance, 5% threshold
+            (0.10, 0.90, True),    # 10% distance, 10% threshold
+            (0.10, 0.95, False),   # 5% distance, 10% threshold
+        ]
+        
+        for min_distance, yes_price, should_pass in test_cases:
+            direction = 'YES' if yes_price >= 0.5 else 'NO'
+            distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+            # Use tolerance for floating-point comparison
+            passes_filter = (distance_to_extreme - min_distance) >= -1e-10
+            
+            assert passes_filter == should_pass, \
+                f"Price {yes_price*100}% with min {min_distance*100}% " \
+                f"(distance {distance_to_extreme*100}%) should {'pass' if should_pass else 'fail'}"
+    
+    def test_min_max_distance_interaction(self):
+        """Test interaction between min_distance and extremity filters."""
+        min_extremity = 0.25  # >75% or <25%
+        min_distance = 0.015  # 1.5%
+        
+        test_markets = [
+            (0.85, True, True, "85%: extreme and far from 100%"),
+            (0.76, True, True, "76%: barely extreme, far from 100%"),
+            (0.99, True, False, "99%: extreme but too close to 100%"),
+            (0.985, True, True, "98.5%: extreme and at min distance"),
+            (0.55, False, True, "55%: not extreme but far from 100%"),
+        ]
+        
+        for yes_price, should_pass_extremity, should_pass_distance, desc in test_markets:
+            # Check extremity
+            is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
+            assert is_extreme == should_pass_extremity, f"{desc}: extremity failed"
+            
+            # Check distance (with tolerance)
+            direction = 'YES' if yes_price >= 0.5 else 'NO'
+            distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+            passes_distance = (distance_to_extreme - min_distance) >= -1e-10
+            assert passes_distance == should_pass_distance, f"{desc}: distance failed"
+            
+            # Both must pass
+            should_include = should_pass_extremity and should_pass_distance
+            assert (is_extreme and passes_distance) == should_include, f"{desc}: combined failed"
+    
+    def test_distance_filter_with_zero_min(self):
+        """Test that 0% min_distance allows all markets."""
+        min_distance = 0.0
+        
+        for yes_price in [1.0, 0.999, 0.99, 0.01, 0.001, 0.0]:
+            direction = 'YES' if yes_price >= 0.5 else 'NO'
+            distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+            passes_filter = distance_to_extreme >= min_distance
+            assert passes_filter, f"{yes_price*100}% should pass with 0% min distance"
+    
+    def test_distance_filter_with_max_10_percent(self):
+        """Test 10% min_distance (maximum slider value)."""
+        min_distance = 0.10
+        
+        test_cases = [
+            (0.50, True, "50% should pass"),
+            (0.60, True, "60% should pass"),
+            (0.90, True, "90% should pass"),
+            (0.10, True, "10% should pass"),
+            (0.91, False, "91% should fail"),
+            (0.09, False, "9% should fail"),
+            (1.0, False, "100% should fail"),
+            (0.0, False, "0% should fail"),
+        ]
+        
+        for yes_price, should_pass, desc in test_cases:
+            direction = 'YES' if yes_price >= 0.5 else 'NO'
+            distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+            # Use tolerance for floating-point
+            passes_filter = (distance_to_extreme - min_distance) >= -1e-10
+            assert passes_filter == should_pass, desc
 
 
 class TestMomentumIntegration:
