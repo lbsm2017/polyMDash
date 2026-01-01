@@ -103,7 +103,6 @@ def main():
         index=1,
         help="Choose trading strategy"
     )
-    st.sidebar.markdown("---")
     
     # Route to appropriate strategy
     if strategy == "Momentum Hunter":
@@ -1262,9 +1261,29 @@ def render_pullback_hunter():
     # Compact header with minimal padding
     st.markdown('<h2 style="margin-top: -1rem; margin-bottom: 0.3rem; padding-top: 0;">🎯 Momentum Hunter</h2>', unsafe_allow_html=True)
     
+    # Add CSS to reduce sidebar spacing
+    st.markdown("""
+    <style>
+        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > [style*="flex-direction"] > div > [data-testid="stVerticalBlock"] {
+            gap: 0.3rem !important;
+        }
+        [data-testid="stSidebar"] [data-baseweb="input"],
+        [data-testid="stSidebar"] [data-baseweb="select"],
+        [data-testid="stSidebar"] [data-baseweb="slider"],
+        [data-testid="stSidebar"] [data-baseweb="checkbox"] {
+            margin-bottom: 0.5rem !important;
+        }
+        [data-testid="stSidebar"] .stSelectbox,
+        [data-testid="stSidebar"] .stSlider,
+        [data-testid="stSidebar"] .stCheckbox,
+        [data-testid="stSidebar"] .stNumberInput {
+            margin-bottom: 0.4rem !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Move all controls to sidebar
     with st.sidebar:
-        st.markdown("---")
         st.markdown("### ⚙️ Momentum Hunter Settings")
         
         max_expiry_hours = st.select_slider(
@@ -1316,8 +1335,8 @@ def render_pullback_hunter():
         
         min_volume = st.select_slider(
             "Min Volume",
-            options=[50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000, 1_500_000, 2_000_000],
-            value=500_000,
+            options=[50_000, 100_000, 250_000, 500_000, 750_000, 1_000_000],
+            value=250_000,
             format_func=lambda x: f"${x/1000:.0f}k" if x < 1_000_000 else f"${x/1_000_000:.1f}M",
             help="Minimum 24h trading volume. Higher volume = better liquidity."
         )
@@ -1344,9 +1363,7 @@ def render_pullback_hunter():
             logger.info("🗑️ Cache cleared")
             st.rerun()
         
-        # Force refresh with URL param (nuclear option)
-        st.caption("Still seeing wrong data? [Force Refresh](?refresh=true)")
-        
+        st.markdown('<div style="margin-top: 0.3rem;"></div>', unsafe_allow_html=True)
         st.caption("💡 Qualifies if extreme (>75%/<25%) OR high momentum (≥30%) with >60%/<40% probability")
     
     # Scan button, sort dropdown, and stats in one row
@@ -1430,275 +1447,590 @@ def render_pullback_hunter():
             st.warning("No opportunities found. Try adjusting filters.")
 
 
-def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: int, debug_mode: bool = False, momentum_window_hours: int = 48, min_momentum: float = 0.15, min_volume: float = 500_000, min_distance: float = 0.015) -> List[Dict]:
-    """Scan markets for momentum opportunities toward extremes."""
+def scan_pullback_markets(
+    max_expiry_hours: int, 
+    min_extremity: float, 
+    limit: int, 
+    debug_mode: bool = False, 
+    momentum_window_hours: int = 48, 
+    min_momentum: float = 0.15, 
+    min_volume: float = 500_000, 
+    min_distance: float = 0.015
+) -> List[Dict]:
+    """
+    Elite momentum scanner with architectural excellence.
+    
+    Pipeline Architecture:
+    ┌─────────────────────────────────────────────────────────┐
+    │  STAGE 1: MULTI-SOURCE AGGREGATION                      │
+    │  • 8 diverse API strategies for comprehensive coverage  │
+    │  • Intelligent deduplication by market slug             │
+    └─────────────────────────────────────────────────────────┘
+                            ↓
+    ┌─────────────────────────────────────────────────────────┐
+    │  STAGE 2: STRUCTURAL VALIDATION                         │
+    │  • Verify required fields (question, slug, outcomes)    │
+    │  • Parse and validate price data integrity              │
+    │  • Clear rejection logging with categorization          │
+    └─────────────────────────────────────────────────────────┘
+                            ↓
+    ┌─────────────────────────────────────────────────────────┐
+    │  STAGE 3: QUALITY FILTERS                               │
+    │  • Expiry window (>0h, <max_hours)                      │
+    │  • Volume threshold (≥min_volume)                       │
+    │  • Position filter (avoid 25%-75% middle zone)          │
+    │  • Momentum threshold (≥min_momentum)                   │
+    └─────────────────────────────────────────────────────────┘
+                            ↓
+    ┌─────────────────────────────────────────────────────────┐
+    │  STAGE 4: SCORING & RANKING                             │
+    │  • Composite momentum calculation                       │
+    │  • Multi-factor opportunity scoring                     │
+    │  • Annualized yield projection                          │
+    └─────────────────────────────────────────────────────────┘
+    
+    Returns: Ranked list of momentum opportunities
+    """
+    import json
+    from datetime import datetime, timezone
+    
+    # ═══════════════════════════════════════════════════════════════
+    # HELPER FUNCTIONS: Clean, testable, single-responsibility
+    # ═══════════════════════════════════════════════════════════════
+    
+    def categorize_market(question: str) -> str:
+        """Categorize market by domain for analytics."""
+        q = question.lower()
+        if any(w in q for w in ['nfl', 'nba', 'mlb', 'nhl', 'super bowl', 'championship', 'playoff']):
+            return 'Sports'
+        if any(w in q for w in ['trump', 'biden', 'election', 'president', 'senate', 'congress']):
+            return 'Politics'
+        if any(w in q for w in ['movie', 'film', 'box office', 'oscar', 'grammy', 'celebrity']):
+            return 'Entertainment'
+        if any(w in q for w in ['bitcoin', 'stock', 'market', 'economy', 'fed', 'rate', 'gdp']):
+            return 'Finance'
+        return 'Other'
+    
+    def validate_market_structure(market: Dict) -> tuple[bool, str, List[str], List[float]]:
+        """
+        Validate market has required fields and parseable data.
+        
+        Returns: (is_valid, question, outcomes, prices)
+        """
+        # Required fields
+        question = market.get('question', 'Unknown')
+        if not question or question == 'Unknown':
+            return False, '', [], []
+        
+        # Parse outcomes
+        outcomes = market.get('outcomes', [])
+        if isinstance(outcomes, str):
+            try:
+                outcomes = json.loads(outcomes)
+            except:
+                outcomes = [o.strip() for o in outcomes.split(',') if o.strip()]
+        
+        if not isinstance(outcomes, list) or len(outcomes) < 2:
+            return False, question, [], []
+        
+        # Parse prices - with fallback strategy
+        outcome_prices = []
+        
+        # PRIMARY: Try outcomePrices field
+        if 'outcomePrices' in market:
+            raw_prices = market.get('outcomePrices', [])
+            
+            # Handle string outcomePrices (JSON or comma-separated)
+            if isinstance(raw_prices, str):
+                try:
+                    # Try JSON first
+                    outcome_prices = json.loads(raw_prices)
+                except:
+                    # Try comma-separated values
+                    try:
+                        outcome_prices = [float(p.strip()) for p in raw_prices.split(',') if p.strip()]
+                    except:
+                        outcome_prices = []
+            elif isinstance(raw_prices, list):
+                outcome_prices = raw_prices
+            else:
+                outcome_prices = []
+            
+            # Convert all elements to float
+            if outcome_prices:
+                try:
+                    outcome_prices = [float(p) for p in outcome_prices if p is not None]
+                except (ValueError, TypeError):
+                    outcome_prices = []
+        
+        # FALLBACK: Use lastTradePrice for binary markets
+        if (not outcome_prices or len(outcome_prices) != len(outcomes)) and len(outcomes) == 2:
+            last_trade = market.get('lastTradePrice', 0)
+            
+            # Convert to float if it's a string
+            try:
+                last_trade = float(last_trade) if last_trade else 0
+            except (ValueError, TypeError):
+                last_trade = 0
+            
+            if last_trade > 0:
+                # Binary market: YES price = lastTradePrice, NO price = 1 - lastTradePrice
+                outcome_prices = [last_trade, 1.0 - last_trade]
+            else:
+                # Try bid/ask midpoint
+                bid = market.get('bestBid', 0)
+                ask = market.get('bestAsk', 0)
+                
+                # Convert to float if strings
+                try:
+                    bid = float(bid) if bid else 0
+                except (ValueError, TypeError):
+                    bid = 0
+                
+                try:
+                    ask = float(ask) if ask else 0
+                except (ValueError, TypeError):
+                    ask = 0
+                
+                if bid > 0 and ask > 0 and ask >= bid:
+                    mid_price = (bid + ask) / 2
+                    outcome_prices = [mid_price, 1.0 - mid_price]
+        
+        # Validate price count matches outcomes
+        if not outcome_prices or len(outcome_prices) != len(outcomes):
+            return False, question, outcomes, []
+        
+        # Validate prices are in valid range (0-1)
+        if not all(0 <= p <= 1 for p in outcome_prices):
+            return False, question, outcomes, []
+        
+        return True, question, outcomes, outcome_prices
+    
+    def parse_expiry(market: Dict, now: datetime) -> Optional[datetime]:
+        """Parse market end date safely."""
+        end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
+        if not end_date:
+            return None
+        try:
+            return datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            return None
+    
+    # ═══════════════════════════════════════════════════════════════
+    # MAIN ASYNC PIPELINE
+    # ═══════════════════════════════════════════════════════════════
     
     async def fetch():
+        now = datetime.now(timezone.utc)
+        
+        # ──────────────────────────────────────────────────────────
+        # STAGE 1: MULTI-SOURCE MARKET AGGREGATION
+        # ──────────────────────────────────────────────────────────
+        
         async with GammaClient() as client:
-            # Try multiple sorting strategies to get diverse markets
-            # Volume sorting returns only crypto, so we'll use multiple approaches
-            
             all_markets = []
-            excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
-                            'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
             
-            def is_excluded(market):
-                slug = (market.get('slug', '') or '').lower()
-                question = (market.get('question', '') or '').lower()
-                return any(ex in slug or ex in question for ex in excluded_terms)
-            
-            # Strategy 1: Fetch by liquidity (different from volume)
-            logger.info("Fetching markets sorted by liquidity...")
+            # Strategy 1: Liquidity sort
+            logger.info("📊 Fetching markets sorted by liquidity...")
             try:
-                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="liquidity")
-                non_crypto = [m for m in markets if not is_excluded(m)]
-                logger.info(f"Liquidity sort: {len(markets)} total, {len(non_crypto)} non-crypto")
-                all_markets.extend(non_crypto)
+                markets = await client.get_markets(limit=1000, active=True, closed=False, order_by="liquidity")
+                logger.info(f"   Liquidity: {len(markets)} markets")
+                all_markets.extend(markets)
             except Exception as e:
-                logger.warning(f"Liquidity sort failed: {e}")
+                logger.warning(f"   Liquidity fetch failed: {e}")
             
-            # Strategy 2: Fetch without sorting (API default)
-            logger.info("Fetching markets with default sorting...")
+            # Strategy 2: Default sort
+            logger.info("📊 Fetching markets with default sorting...")
             try:
-                markets = await client.get_markets(limit=min(500, limit), active=True, closed=False, order_by="")
-                non_crypto = [m for m in markets if not is_excluded(m)]
-                logger.info(f"Default sort: {len(markets)} total, {len(non_crypto)} non-crypto")
-                all_markets.extend(non_crypto)
+                markets = await client.get_markets(limit=1000, active=True, closed=False, order_by="")
+                logger.info(f"   Default: {len(markets)} markets")
+                all_markets.extend(markets)
             except Exception as e:
-                logger.warning(f"Default sort failed: {e}")
+                logger.warning(f"   Default fetch failed: {e}")
             
-            # Strategy 3: Use offset to get different market sets
-            if len(all_markets) < 100:
-                logger.info("Few non-crypto markets found, trying offset pagination...")
-                for offset in [500, 1000, 1500]:
-                    try:
-                        markets = await client.get_markets(
-                            limit=min(500, limit),
-                            offset=offset,
-                            active=True,
-                            closed=False,
-                            order_by="volume24hr"
-                        )
-                        non_crypto = [m for m in markets if not is_excluded(m)]
-                        logger.info(f"Offset {offset}: {len(markets)} total, {len(non_crypto)} non-crypto")
-                        all_markets.extend(non_crypto)
-                        if len(all_markets) >= 200:
-                            break
-                    except Exception as e:
-                        logger.warning(f"Offset {offset} failed: {e}")
+            # Strategy 3: Hot markets
+            logger.info("🔥 Fetching hot markets...")
+            try:
+                markets = await client.get_hot_markets(limit=500)
+                logger.info(f"   Hot: {len(markets)} markets")
+                all_markets.extend(markets)
+            except Exception as e:
+                logger.warning(f"   Hot markets failed: {e}")
+            
+            # Strategy 4: Breaking markets (from events)
+            logger.info("📰 Fetching breaking markets...")
+            try:
+                breaking = await client.get_breaking_markets(limit=500)
+                if breaking and isinstance(breaking, list) and breaking and 'markets' in breaking[0]:
+                    # Extract from events
+                    markets = []
+                    for event in breaking:
+                        markets.extend(event.get('markets', []))
+                    breaking = markets
+                logger.info(f"   Breaking: {len(breaking)} markets")
+                all_markets.extend(breaking)
+            except Exception as e:
+                logger.warning(f"   Breaking markets failed: {e}")
+            
+            # Strategy 5: Event markets
+            logger.info("🎯 Fetching event markets...")
+            try:
+                events = await client.get_events(limit=200, archived=False)
+                event_markets = []
+                for event in events:
+                    event_markets.extend(event.get('markets', []))
+                logger.info(f"   Events: {len(event_markets)} markets from {len(events)} events")
+                all_markets.extend(event_markets)
+            except Exception as e:
+                logger.warning(f"   Events failed: {e}")
+            
+            # Strategy 6: Newest markets
+            logger.info("✨ Fetching newest markets...")
+            try:
+                markets = await client.get_markets(limit=500, active=True, closed=False, order_by="createdAt")
+                logger.info(f"   Newest: {len(markets)} markets")
+                all_markets.extend(markets)
+            except Exception as e:
+                logger.warning(f"   Newest markets failed: {e}")
             
             # Deduplicate by slug
             seen = set()
-            markets = []
+            unique_markets = []
             for m in all_markets:
                 slug = m.get('slug', '')
                 if slug and slug not in seen:
                     seen.add(slug)
-                    markets.append(m)
+                    unique_markets.append(m)
             
-            logger.info(f"Combined {len(markets)} unique non-crypto markets from all strategies")
+            logger.info(f"✅ Aggregation complete: {len(all_markets)} total → {len(unique_markets)} unique ({len(all_markets) - len(unique_markets)} duplicates removed)")
             
-            if not markets:
-                logger.error("No non-crypto markets found with any strategy!")
+            if not unique_markets:
+                logger.error("❌ No markets found from any source")
                 return []
             
-            # Log sample
-            if len(markets) >= 5:
-                sample_questions = [m.get('question', 'N/A')[:50] for m in markets[:5]]
-                logger.info(f"Sample markets: {sample_questions}")
+            # Sample
+            if len(unique_markets) >= 5:
+                samples = [m.get('question', 'N/A')[:50] for m in unique_markets[:5]]
+                logger.info(f"📝 Sample: {samples}")
             
-            filtered = markets  # Already filtered for crypto
+            # ──────────────────────────────────────────────────────────
+            # STAGE 2: STRUCTURAL VALIDATION
+            # ──────────────────────────────────────────────────────────
+            
+            logger.info(f"\n🔍 Validating {len(unique_markets)} markets...")
+            
+            validation_stats = {
+                'no_question': 0,
+                'no_outcomes': 0,
+                'no_prices_field': 0,
+                'invalid_prices': 0,
+                'price_mismatch': 0,
+                'valid': 0
+            }
+            
+            category_stats = {cat: {'total': 0, 'rejected': 0, 'passed': 0} 
+                            for cat in ['Sports', 'Politics', 'Entertainment', 'Finance', 'Other']}
+            
+            validated_markets = []
+            validation_debug_count = 0  # Track debug message count
+            
+            for market in unique_markets:
+                question = market.get('question', '')
+                category = categorize_market(question)
+                category_stats[category]['total'] += 1
+                
+                is_valid, question, outcomes, prices = validate_market_structure(market)
+                
+                if not is_valid:
+                    category_stats[category]['rejected'] += 1
+                    # Determine why it failed
+                    if not question:
+                        validation_stats['no_question'] += 1
+                    elif not outcomes or len(outcomes) < 2:
+                        validation_stats['no_outcomes'] += 1
+                    elif 'outcomePrices' not in market:
+                        validation_stats['no_prices_field'] += 1
+                    elif not prices:
+                        validation_stats['invalid_prices'] += 1
+                        validation_debug_count += 1  # Increment for price parsing issues
+                    elif len(prices) != len(outcomes):
+                        validation_stats['price_mismatch'] += 1
+                    continue
+                
+                # Store validated data
+                market['_validated_question'] = question
+                market['_validated_outcomes'] = outcomes
+                market['_validated_prices'] = prices
+                validated_markets.append(market)
+                validation_stats['valid'] += 1
+                category_stats[category]['passed'] += 1
+            
+            logger.info(f"✅ Validation complete: {validation_stats['valid']}/{len(unique_markets)} passed")
+            logger.info(f"   Rejections:")
+            logger.info(f"     • Missing outcomePrices field: {validation_stats['no_prices_field']}")
+            logger.info(f"     • Invalid price data: {validation_stats['invalid_prices']}")
+            logger.info(f"     • Price/outcome mismatch: {validation_stats['price_mismatch']}")
+            logger.info(f"     • Invalid outcomes: {validation_stats['no_outcomes']}")
             
             if debug_mode:
-                logger.info(f"Debug mode: Processing {len(filtered)} non-crypto markets")
+                logger.info(f"\n📊 Validation by category:")
+                for cat in ['Sports', 'Politics', 'Entertainment', 'Finance', 'Other']:
+                    stats = category_stats[cat]
+                    if stats['total'] > 0:
+                        pass_rate = (stats['passed'] / stats['total']) * 100
+                        logger.info(f"   {cat}: {stats['passed']}/{stats['total']} ({pass_rate:.1f}%)")
+            
+            # ──────────────────────────────────────────────────────────
+            # STAGE 3: QUALITY FILTERING & PROCESSING
+            # ──────────────────────────────────────────────────────────
+            
+            logger.info(f"\n🎯 Applying quality filters to {len(validated_markets)} valid markets...")
+            
+            filter_stats = {
+                'expired': 0,
+                'low_volume': 0,
+                'middle_zone': 0,
+                'too_extreme': 0,
+                'low_momentum': 0,
+                'passed': 0
+            }
+            
+            # Debug: Check first few markets for expiry parsing
+            expiry_debug_count = 0
             
             opportunities = []
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
             
-            # Filter thresholds
-            max_hours_short = max_expiry_hours  # User-specified window (hard cap)
-            high_momentum = 0.30  # 30% absolute momentum is considered high
+            # DEBUG MODE: Bypass all filters and show raw data
+            if debug_mode:
+                logger.info("🐛 DEBUG MODE: Bypassing all quality filters - showing raw market data")
+                for market in validated_markets:
+                    question = market['_validated_question']
+                    outcomes = market['_validated_outcomes']
+                    prices = market['_validated_prices']
+                    
+                    # Market metadata
+                    slug = market.get('slug', '')
+                    url = f"https://polymarket.com/market/{slug}"
+                    is_binary = len(outcomes) == 2 and all(o.lower() in ['yes', 'no'] for o in outcomes)
+                    
+                    # Expiry check (for display only in debug mode)
+                    end_dt = parse_expiry(market, now)
+                    if not end_dt:
+                        end_dt = now
+                    hours_to_expiry = (end_dt - now).total_seconds() / 3600
+                    
+                    # Volume
+                    volume = float(market.get('volume') or 0)
+                    
+                    # Process each outcome
+                    outcome_indices = [0] if is_binary else range(len(outcomes))
+                    
+                    for idx in outcome_indices:
+                        outcome_name = outcomes[idx]
+                        yes_price = prices[idx]
+                        
+                        # Bid/ask spread
+                        if is_binary:
+                            best_bid = float(market.get('bestBid', yes_price - 0.01))
+                            best_ask = float(market.get('bestAsk', yes_price + 0.01))
+                        else:
+                            spread = max(0.01, yes_price * 0.02)
+                            best_bid = max(0.001, yes_price - spread / 2)
+                            best_ask = min(0.999, yes_price + spread / 2)
+                        
+                        # Direction logic (simplified for debug)
+                        if is_binary:
+                            if yes_price > 0.5:
+                                direction = 'YES'
+                            else:
+                                direction = 'NO'
+                        else:
+                            direction = 'YES'
+                        
+                        # Momentum calculation (simplified for debug)
+                        one_day_change = float(market.get('oneDayPriceChange') or 0)
+                        momentum_data = calculate_composite_momentum(yes_price, one_day_change)
+                        momentum = momentum_data['signal_strength']
+                        
+                        # Calculate yield
+                        if direction == 'YES':
+                            entry_price = best_ask
+                            profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
+                        else:
+                            entry_price = 1.0 - best_bid
+                            profit_if_win = (1.0 - entry_price) / entry_price if 0 < entry_price < 1 else 0
+                        
+                        days_to_expiry = hours_to_expiry / 24
+                        if days_to_expiry > 0.1:
+                            exponent = 365 / days_to_expiry
+                            try:
+                                annualized_yield = ((1 + profit_if_win) ** min(exponent, 1000)) - 1
+                            except (OverflowError, ValueError):
+                                annualized_yield = 0
+                        else:
+                            annualized_yield = 0
+                        
+                        # Calculate charm (delta decay)
+                        charm = (momentum * 100) / days_to_expiry if days_to_expiry > 0 else 0
+                        
+                        # Calculate score (simplified for debug)
+                        score_data = calculate_opportunity_score(
+                            current_prob=yes_price,
+                            momentum=momentum,
+                            hours_to_expiry=hours_to_expiry,
+                            volume=volume,
+                            best_bid=best_bid,
+                            best_ask=best_ask,
+                            direction=direction,
+                            one_day_change=one_day_change,
+                        )
+                        
+                        # Format question
+                        display_question = question if is_binary else f"{question} [{outcome_name}]"
+                        
+                        # Add ALL markets in debug mode
+                        opportunities.append({
+                            'question': display_question,
+                            'slug': slug,
+                            'url': url,
+                            'current_prob': yes_price,
+                            'hours_to_expiry': hours_to_expiry,
+                            'end_date': end_dt,
+                            'volume_24h': volume,
+                            'momentum': momentum,
+                            'charm': charm,
+                            'score': score_data['total_score'],
+                            'grade': score_data['grade'],
+                            'direction': direction,
+                            'annualized_yield': annualized_yield,
+                            'best_bid': best_bid,
+                            'best_ask': best_ask
+                        })
+                
+                # Sort by score
+                opportunities.sort(key=lambda x: x['score'], reverse=True)
+                
+                # Final report for debug mode
+                logger.info(f"\n{'='*70}")
+                logger.info(f"DEBUG MODE RESULTS:")
+                logger.info(f"  All validated markets: {len(validated_markets)}")
+                logger.info(f"  Opportunities shown: {len(opportunities)}")
+                logger.info(f"{'='*70}\n")
+                
+                logger.info(f"🎉 Found {len(opportunities)} momentum opportunities (DEBUG MODE)")
+                return opportunities
             
-            processed = 0
-            skipped = 0
+            # NORMAL MODE: Apply quality filters
             
-            # Debug logging flag (configurable via environment or session state)
-            enable_debug_logging = st.session_state.get('enable_price_debug', False)
-            debug_count = 0
-            max_debug_logs = 5
-            
-            for market in filtered:
-                # Get outcomes - handle multi-outcome events
-                outcomes = market.get('outcomes', [])
+            for market in validated_markets:
+                question = market['_validated_question']
+                outcomes = market['_validated_outcomes']
+                prices = market['_validated_prices']
                 
-                # Parse JSON if outcomes is a string (API may return as JSON string)
-                if isinstance(outcomes, str):
-                    import json
-                    try:
-                        outcomes = json.loads(outcomes)
-                    except (json.JSONDecodeError, ValueError):
-                        # If parsing fails, try splitting by comma
-                        outcomes = [o.strip() for o in outcomes.split(',') if o.strip()]
-                
-                # Ensure it's a list
-                if not isinstance(outcomes, list):
-                    outcomes = []
-                
-                if not outcomes or len(outcomes) < 2:
-                    skipped += 1
-                    continue
-                
-                # Get parent question for multi-outcome markets
-                parent_question = market.get('question', 'Unknown')
-                market_slug = market.get('slug', '')
-                
-                # Construct market URL
-                market_url = f"https://polymarket.com/market/{market_slug}"
-                
-                # Determine market type: Binary (Yes/No) or Multi-outcome
+                # Market metadata
+                slug = market.get('slug', '')
+                url = f"https://polymarket.com/market/{slug}"
                 is_binary = len(outcomes) == 2 and all(o.lower() in ['yes', 'no'] for o in outcomes)
                 
-                # Get outcome prices
-                outcome_prices = market.get('outcomePrices', [])
-                if isinstance(outcome_prices, str):
-                    import json
-                    outcome_prices = json.loads(outcome_prices)
+                # Expiry check
+                end_dt = parse_expiry(market, now)
+                if not end_dt:
+                    end_dt = now
+                hours_to_expiry = (end_dt - now).total_seconds() / 3600
                 
-                if not outcome_prices or len(outcome_prices) != len(outcomes):
-                    skipped += 1
+                # Debug first few markets with failed expiry
+                if expiry_debug_count < 5 and (not end_dt or end_dt == now or hours_to_expiry <= 0 or hours_to_expiry > max_expiry_hours):
+                    logger.info(f"DEBUG Expiry: {question[:60]}")
+                    logger.info(f"  endDate: {market.get('endDate')}")
+                    logger.info(f"  end_date_iso: {market.get('end_date_iso')}")
+                    logger.info(f"  end_date: {market.get('end_date')}")
+                    logger.info(f"  Parsed: {end_dt}")
+                    logger.info(f"  Hours: {hours_to_expiry:.2f}, Max: {max_expiry_hours}")
+                    expiry_debug_count += 1
+                
+                if hours_to_expiry <= 0 or hours_to_expiry > max_expiry_hours:
+                    filter_stats['expired'] += 1
                     continue
                 
-                # =================================================================
-                # OUTCOME PROCESSING
-                # Binary: Process once using YES probability to determine direction
-                # Multi-outcome: Process each outcome as separate market
-                # =================================================================
-                
-                if is_binary:
-                    # Binary market: Single processing using YES price
-                    outcome_indices = [0]  # Only process YES once
-                else:
-                    # Multi-outcome: Process all outcomes
-                    outcome_indices = range(len(outcomes))
+                # Volume check
+                volume = float(market.get('volume') or 0)
+                if volume < min_volume:
+                    filter_stats['low_volume'] += 1
+                    continue
                 
                 # Process each outcome
-                for outcome_idx in outcome_indices:
-                    outcome_name = outcomes[outcome_idx]
-                    yes_price = float(outcome_prices[outcome_idx])
+                outcome_indices = [0] if is_binary else range(len(outcomes))
+                
+                for idx in outcome_indices:
+                    outcome_name = outcomes[idx]
+                    yes_price = prices[idx]
                     
-                    # Get bid/ask prices
+                    # Bid/ask spread
                     if is_binary:
-                        # Binary: Use market bid/ask (for YES side)
                         best_bid = float(market.get('bestBid', yes_price - 0.01))
                         best_ask = float(market.get('bestAsk', yes_price + 0.01))
                     else:
-                        # Multi-outcome: Estimate from price
                         spread = max(0.01, yes_price * 0.02)
                         best_bid = max(0.001, yes_price - spread / 2)
                         best_ask = min(0.999, yes_price + spread / 2)
                     
-                    # Get expiry and volume data
-                    end_date = market.get('endDate') or market.get('end_date_iso') or market.get('end_date')
-                    try:
-                        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if end_date else now
-                    except (ValueError, AttributeError):
-                        end_dt = now
-                    
-                    hours_to_expiry = (end_dt - now).total_seconds() / 3600
-                    if hours_to_expiry <= 0 or hours_to_expiry > max_hours_short:
-                        continue
-                    
-                    volume = float(market.get('volume') or 0)
-                    
-                    # Apply volume filter
-                    if volume < min_volume:
-                        continue
-                    
-                    # Get directional momentum (preserve sign)
-                    one_day_change = float(market.get('oneDayPriceChange') or 0)
-                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
-                    
-                    # Select momentum based on time window
-                    if momentum_window_hours <= 24:
-                        directional_momentum = one_day_change
-                    else:
-                        directional_momentum = one_week_change
-                    
-                    # =================================================================
-                    # SIMPLE DIRECTION LOGIC (User's Request)
-                    # Binary: <25% = NO, >75% = YES (with momentum)
-                    # Multi-outcome: Treat each as separate market with own probability
-                    # =================================================================
-                    
-                    # For binary markets: determine YES or NO based on probability
-                    # For multi-outcome: each outcome is its own opportunity
+                    # Direction logic
                     if is_binary:
                         if yes_price > 0.75:
                             direction = 'YES'
                         elif yes_price < 0.25:
                             direction = 'NO'
                         else:
-                            continue  # Skip middle zone
+                            filter_stats['middle_zone'] += 1
+                            continue
                     else:
-                        # Multi-outcome: treat as YES for this outcome
                         direction = 'YES'
                     
-                    # Apply min_distance filter to avoid markets too close to extremes (0% or 100%)
-                    # This prevents trading markets that are about to resolve
-                    if direction == 'YES':
-                        # For YES direction, price should be < (1.0 - min_distance)
-                        # Example: if min_distance = 1.5%, price must be < 98.5%
-                        if yes_price >= (1.0 - min_distance):
-                            continue
-                    else:  # NO direction
-                        # For NO direction, price should be > min_distance
-                        # Example: if min_distance = 1.5%, price must be > 1.5%
-                        if yes_price <= min_distance:
-                            continue
+                    # Distance from extreme check
+                    if direction == 'YES' and yes_price >= (1.0 - min_distance):
+                        filter_stats['too_extreme'] += 1
+                        continue
+                    if direction == 'NO' and yes_price <= min_distance:
+                        filter_stats['too_extreme'] += 1
+                        continue
                     
-                    # Calculate composite momentum
+                    # Momentum calculation
+                    one_day_change = float(market.get('oneDayPriceChange') or 0)
+                    one_week_change = float(market.get('oneWeekPriceChange') or 0)
+                    directional_momentum = one_day_change if momentum_window_hours <= 24 else one_week_change
+                    
                     momentum_data = calculate_composite_momentum(yes_price, directional_momentum)
                     momentum = momentum_data['signal_strength']
                     
-                    # Require minimum momentum
                     if momentum < min_momentum:
+                        filter_stats['low_momentum'] += 1
                         continue
                     
-                    # Calculate annualized yield
+                    # Passed all filters!
+                    filter_stats['passed'] += 1
+                    
+                    # Calculate yield
                     if direction == 'YES':
                         entry_price = best_ask
                         profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 else 0
-                    else:  # NO
+                    else:
                         entry_price = 1.0 - best_bid
-                        profit_if_win = (1.0 - entry_price) / entry_price if entry_price > 0 and entry_price < 1.0 else 0
+                        profit_if_win = (1.0 - entry_price) / entry_price if 0 < entry_price < 1 else 0
                     
                     days_to_expiry = hours_to_expiry / 24
-                    
-                    # Calculate APY with overflow protection
                     if days_to_expiry > 0.1:
                         exponent = 365 / days_to_expiry
-                        if exponent > 1000:
+                        try:
+                            annualized_yield = ((1 + profit_if_win) ** min(exponent, 1000)) - 1
+                        except (OverflowError, ValueError):
                             annualized_yield = 0
-                        else:
-                            try:
-                                annualized_yield = ((1 + profit_if_win) ** exponent) - 1
-                            except (OverflowError, ValueError):
-                                annualized_yield = 0
                     else:
                         annualized_yield = 0
                     
-                    # Calculate Charm (delta decay rate) BEFORE score calculation
-                    # Charm = -∂Δ/∂τ measures how momentum changes per day
-                    # Positive charm = momentum accelerating, Negative = decelerating
-                    if days_to_expiry > 0:
-                        # Charm approximation: momentum change rate per day
-                        # Higher absolute charm = faster momentum acceleration/deceleration
-                        charm = (momentum * 100) / days_to_expiry  # Percentage points per day
-                    else:
-                        charm = 0
+                    # Calculate charm (delta decay)
+                    charm = (momentum * 100) / days_to_expiry if days_to_expiry > 0 else 0
                     
-                    # Calculate score with APY and Charm
+                    # Calculate score
                     score_data = calculate_opportunity_score(
                         current_prob=yes_price,
                         momentum=momentum,
@@ -1713,17 +2045,14 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         charm=charm
                     )
                     
-                    # Format display question
-                    if is_binary:
-                        display_question = parent_question
-                    else:
-                        display_question = f"{parent_question} [{outcome_name}]"
+                    # Format question
+                    display_question = question if is_binary else f"{question} [{outcome_name}]"
                     
-                    # Add to opportunities
+                    # Add opportunity
                     opportunities.append({
                         'question': display_question,
-                        'slug': market_slug,
-                        'url': market_url,
+                        'slug': slug,
+                        'url': url,
                         'current_prob': yes_price,
                         'hours_to_expiry': hours_to_expiry,
                         'end_date': end_dt,
@@ -1738,28 +2067,39 @@ def scan_pullback_markets(max_expiry_hours: int, min_extremity: float, limit: in
                         'best_ask': best_ask
                     })
             
+            # Sort by score
             opportunities.sort(key=lambda x: x['score'], reverse=True)
             
-            # DEBUG: Check for duplicates and deduplicate
+            # ──────────────────────────────────────────────────────────
+            # STAGE 4: DEDUPLICATION & REPORTING
+            # ──────────────────────────────────────────────────────────
+            
+            # Deduplicate opportunities
             seen_keys = set()
             unique_opportunities = []
-            duplicate_count = 0
-            
             for opp in opportunities:
-                # Create unique key from slug + direction + prob
                 key = (opp['slug'], opp['direction'], round(opp['current_prob'], 4))
                 if key not in seen_keys:
                     seen_keys.add(key)
                     unique_opportunities.append(opp)
-                else:
-                    duplicate_count += 1
-                    logger.warning(f"DUPLICATE: {opp['question'][:50]}")
             
-            if duplicate_count > 0:
-                logger.error(f"❌ Removed {duplicate_count} duplicates ({len(opportunities)} -> {len(unique_opportunities)})")
+            if len(opportunities) != len(unique_opportunities):
+                logger.info(f"🔄 Deduplication: {len(opportunities)} → {len(unique_opportunities)} ({len(opportunities) - len(unique_opportunities)} removed)")
                 opportunities = unique_opportunities
             
-            logger.info(f"Found {len(opportunities)} momentum opportunities (processed {processed}, skipped {skipped})")
+            # Final report
+            logger.info(f"\n{'='*70}")
+            logger.info(f"QUALITY FILTER RESULTS:")
+            logger.info(f"  Filtered markets: {len(validated_markets)}")
+            logger.info(f"  ❌ Expired/too far: {filter_stats['expired']}")
+            logger.info(f"  ❌ Low volume (<${min_volume:,.0f}): {filter_stats['low_volume']}")
+            logger.info(f"  ❌ Middle zone (25%-75%): {filter_stats['middle_zone']}")
+            logger.info(f"  ❌ Too close to extreme: {filter_stats['too_extreme']}")
+            logger.info(f"  ❌ Low momentum (<{min_momentum:.1%}): {filter_stats['low_momentum']}")
+            logger.info(f"  ✅ PASSED: {filter_stats['passed']}")
+            logger.info(f"{'='*70}\n")
+            
+            logger.info(f"🎉 Found {len(opportunities)} momentum opportunities")
             return opportunities
     
     return asyncio.run(fetch())

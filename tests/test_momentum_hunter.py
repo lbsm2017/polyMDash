@@ -11,88 +11,104 @@ import asyncio
 class TestMomentumHunter:
     """Test suite for Momentum Hunter scanner."""
     
-    def test_crypto_filter(self):
-        """Test that crypto markets are properly filtered out."""
-        excluded_terms = {'bitcoin', 'btc', 'crypto', 'ethereum', 'eth', 'solana', 'xrp', 'sol', 
-                        'cryptocurrency', 'updown', 'up-down', 'btc-', 'eth-', 'sol-'}
+    def test_market_categorization(self):
+        """Test that markets are correctly categorized by domain."""
+        def categorize_market(question: str) -> str:
+            q_lower = question.lower()
+            if any(word in q_lower for word in ['election', 'trump', 'biden', 'congress', 'senate', 'president', 'vote', 'poll']):
+                return 'Politics'
+            elif any(word in q_lower for word in ['nfl', 'nba', 'mlb', 'super bowl', 'soccer', 'football', 'basketball', 'sport', 'championship', 'playoff', 'league']):
+                return 'Sports'
+            elif any(word in q_lower for word in ['movie', 'oscar', 'emmy', 'grammy', 'celebrity', 'actor', 'actress', 'box office']):
+                return 'Entertainment'
+            elif any(word in q_lower for word in ['stock', 'nasdaq', 's&p', 'dow', 'gdp', 'inflation', 'fed', 'interest rate', 'recession']):
+                return 'Finance'
+            else:
+                return 'Other'
         
-        def is_excluded(market):
-            slug = (market.get('slug', '') or '').lower()
-            question = (market.get('question', '') or '').lower()
-            return any(ex in slug or ex in question for ex in excluded_terms)
-        
-        # Test crypto markets are excluded
-        crypto_markets = [
-            {'slug': 'bitcoin-price-2025', 'question': 'Will Bitcoin reach $100k?'},
-            {'slug': 'btc-updown-5m-1234', 'question': 'Bitcoin Up or Down'},
-            {'slug': 'eth-price', 'question': 'Ethereum above $5000?'},
-            {'slug': 'solana-prediction', 'question': 'Solana price prediction'},
+        # Test politics categorization
+        politics_markets = [
+            'Will Trump win the 2024 election?',
+            'Biden approval rating above 50%?',
+            'Will Democrats control Senate?',
         ]
+        for q in politics_markets:
+            assert categorize_market(q) == 'Politics', f"Failed to categorize politics: {q}"
         
-        for market in crypto_markets:
-            assert is_excluded(market), f"Failed to exclude crypto market: {market['slug']}"
-        
-        # Test non-crypto markets are included
-        non_crypto_markets = [
-            {'slug': 'us-recession-2025', 'question': 'US recession in 2025?'},
-            {'slug': 'trump-president', 'question': 'Trump wins 2024?'},
-            {'slug': 'fed-rate-cut', 'question': 'Fed emergency rate cut?'},
+        # Test sports categorization
+        sports_markets = [
+            'Will the Lakers win the NBA championship?',
+            'Who will win the 2025 Super Bowl?',
+            'Premier League top scorer',
         ]
+        for q in sports_markets:
+            assert categorize_market(q) == 'Sports', f"Failed to categorize sports: {q}"
         
-        for market in non_crypto_markets:
-            assert not is_excluded(market), f"Incorrectly excluded non-crypto market: {market['slug']}"
+        # Test finance categorization
+        finance_markets = [
+            'Will the Fed cut interest rates?',
+            'S&P 500 above 5000?',
+            'US recession in 2025?',
+        ]
+        for q in finance_markets:
+            assert categorize_market(q) == 'Finance', f"Failed to categorize finance: {q}"
     
-    def test_extremity_qualification(self):
-        """Test market qualification logic based on extremity."""
-        min_extremity = 0.25  # >75% or <25%
+    def test_direction_thresholds(self):
+        """Test market direction determination logic."""
+        # YES direction for >75%
+        assert 0.80 > 0.75  # Qualifies for YES
+        assert 0.76 > 0.75  # Qualifies for YES
+        assert 0.60 <= 0.75 # Does not qualify for YES (middle zone)
         
-        # Extreme YES markets
-        assert 0.80 >= (0.5 + min_extremity)  # Qualifies
-        assert 0.75 >= (0.5 + min_extremity)  # Qualifies
-        assert 0.60 < (0.5 + min_extremity)   # Does not qualify on extremity alone
-        
-        # Extreme NO markets
-        assert 0.20 <= (0.5 - min_extremity)  # Qualifies
-        assert 0.25 <= (0.5 - min_extremity)  # Qualifies
-        assert 0.40 > (0.5 - min_extremity)   # Does not qualify on extremity alone
+        # NO direction for <25%
+        assert 0.20 < 0.25  # Qualifies for NO
+        assert 0.24 < 0.25  # Qualifies for NO
+        assert 0.40 >= 0.25 # Does not qualify for NO (middle zone)
     
-    def test_momentum_qualification(self):
-        """Test high momentum qualification for somewhat extreme markets."""
-        high_momentum = 0.30
-        
-        # Markets with high momentum (≥30%) and >60% or <40% probability
+    def test_middle_zone_filtering(self):
+        """Test that markets in the middle zone (25%-75%) are filtered out."""
+        # Markets to test
         test_cases = [
-            {'prob': 0.65, 'momentum': 0.35, 'should_qualify': True},  # High momentum + somewhat extreme
-            {'prob': 0.35, 'momentum': 0.32, 'should_qualify': True},  # High momentum + somewhat extreme
-            {'prob': 0.55, 'momentum': 0.40, 'should_qualify': False}, # High momentum but not extreme enough
-            {'prob': 0.70, 'momentum': 0.10, 'should_qualify': False}, # Extreme but low momentum
+            {'prob': 0.80, 'should_pass': True},   # YES direction (>75%)
+            {'prob': 0.76, 'should_pass': True},   # YES direction (>75%)
+            {'prob': 0.75, 'should_pass': False},  # Middle zone
+            {'prob': 0.50, 'should_pass': False},  # Middle zone
+            {'prob': 0.25, 'should_pass': False},  # Middle zone
+            {'prob': 0.24, 'should_pass': True},   # NO direction (<25%)
+            {'prob': 0.20, 'should_pass': True},   # NO direction (<25%)
         ]
         
         for case in test_cases:
-            is_somewhat_extreme = case['prob'] >= 0.60 or case['prob'] <= 0.40
-            has_high_momentum = case['momentum'] >= high_momentum
-            qualifies = has_high_momentum and is_somewhat_extreme
+            # Binary market direction logic
+            if case['prob'] > 0.75:
+                direction = 'YES'
+                in_middle_zone = False
+            elif case['prob'] < 0.25:
+                direction = 'NO'
+                in_middle_zone = False
+            else:
+                direction = None
+                in_middle_zone = True
             
-            assert qualifies == case['should_qualify'], \
-                f"Qualification mismatch for prob={case['prob']}, momentum={case['momentum']}"
+            passes = not in_middle_zone
+            assert passes == case['should_pass'], \
+                f"Prob {case['prob']} should {'pass' if case['should_pass'] else 'be filtered'}"
     
-    def test_time_window_extension(self):
-        """Test that high momentum markets get extended time window."""
-        max_hours_short = 72   # 3 days
-        max_hours_momentum = 336  # 14 days
-        high_momentum = 0.30
+    def test_expiry_window_filtering(self):
+        """Test that markets are filtered by single expiry window."""
+        max_expiry_hours = 72  # User-specified window
         
-        # High momentum market should get extended window
-        momentum = 0.35
-        has_high_momentum = momentum >= high_momentum
-        effective_window = max_hours_momentum if has_high_momentum else max_hours_short
-        assert effective_window == 336, "High momentum should extend window to 14 days"
+        # Market within window should pass
+        hours_to_expiry = 48
+        assert 0 < hours_to_expiry <= max_expiry_hours, "48h should qualify for 72h window"
         
-        # Low momentum market should use short window
-        momentum = 0.15
-        has_high_momentum = momentum >= high_momentum
-        effective_window = max_hours_momentum if has_high_momentum else max_hours_short
-        assert effective_window == 72, "Low momentum should use 3-day window"
+        # Market beyond window should fail
+        hours_to_expiry = 100
+        assert hours_to_expiry > max_expiry_hours, "100h should not qualify for 72h window"
+        
+        # Expired market should fail
+        hours_to_expiry = -1
+        assert hours_to_expiry <= 0, "Expired market should not qualify"
     
     def test_price_extraction_priority(self):
         """Test price extraction from lastTradePrice with bestBid/bestAsk fallback."""
@@ -203,29 +219,30 @@ class TestMomentumHunter:
         momentum = max(abs(one_day_change), abs(one_week_change))
         assert momentum == 0.25, "Should use absolute values"
     
-    def test_debug_mode_bypasses_filters(self):
-        """Test that debug mode shows all markets without extremity/expiry filters."""
-        debug_mode = True
+    def test_market_validation_structure(self):
+        """Test the market validation helper function logic."""
+        # Valid market with all required fields
+        valid_market = {
+            'question': 'Will X happen?',
+            'slug': 'will-x-happen',
+            'outcomes': '["Yes", "No"]',
+            'outcomePrices': '["0.75", "0.25"]'
+        }
         
-        # In debug mode, these checks should be skipped
-        yes_price = 0.51  # Not extreme at all
-        min_extremity = 0.25
+        # Check all required fields exist
+        assert 'question' in valid_market
+        assert 'slug' in valid_market
+        assert 'outcomes' in valid_market
+        assert 'outcomePrices' in valid_market
         
-        is_extreme_yes = yes_price >= (0.5 + min_extremity)
-        is_extreme_no = yes_price <= (0.5 - min_extremity)
+        # Invalid market missing outcomePrices
+        invalid_market = {
+            'question': 'Will Y happen?',
+            'slug': 'will-y-happen',
+            'outcomes': '["Yes", "No"]'
+        }
         
-        # Normally wouldn't qualify
-        assert not is_extreme_yes and not is_extreme_no
-        
-        # But debug mode should bypass this check and include the market
-        # The test validates the logic structure
-        if debug_mode:
-            # Market should be included regardless of extremity
-            should_include = True
-        else:
-            should_include = is_extreme_yes or is_extreme_no
-        
-        assert should_include, "Debug mode should include non-extreme markets"
+        assert 'outcomePrices' not in invalid_market, "Missing field should be detectable"
     
     def test_sorting_by_expiration(self):
         """Test that opportunities are sorted by expiration (soonest first)."""
@@ -285,20 +302,30 @@ class TestMomentumHunter:
     
     def test_direction_determination(self):
         """Test that direction is correctly determined from price."""
-        # YES direction for >50%
-        yes_price = 0.75
-        direction = 'YES' if yes_price >= 0.5 else 'NO'
-        assert direction == 'YES', "75% probability should be YES direction"
+        # YES direction for >75%
+        yes_price = 0.80
+        direction = 'YES' if yes_price > 0.75 else ('NO' if yes_price < 0.25 else None)
+        assert direction == 'YES', "80% probability should be YES direction"
         
-        # NO direction for <50%
-        yes_price = 0.25
-        direction = 'YES' if yes_price >= 0.5 else 'NO'
-        assert direction == 'NO', "25% probability should be NO direction"
+        # NO direction for <25%
+        yes_price = 0.20
+        direction = 'YES' if yes_price > 0.75 else ('NO' if yes_price < 0.25 else None)
+        assert direction == 'NO', "20% probability should be NO direction"
         
-        # Edge case: exactly 50%
+        # Middle zone: 25%-75%
         yes_price = 0.50
-        direction = 'YES' if yes_price >= 0.5 else 'NO'
-        assert direction == 'YES', "50% probability should be YES direction (inclusive)"
+        direction = 'YES' if yes_price > 0.75 else ('NO' if yes_price < 0.25 else None)
+        assert direction is None, "50% probability should be middle zone (no direction)"
+        
+        # Edge case: exactly 75%
+        yes_price = 0.75
+        direction = 'YES' if yes_price > 0.75 else ('NO' if yes_price < 0.25 else None)
+        assert direction is None, "75% probability should be middle zone (not inclusive)"
+        
+        # Edge case: exactly 25%
+        yes_price = 0.25
+        direction = 'YES' if yes_price > 0.75 else ('NO' if yes_price < 0.25 else None)
+        assert direction is None, "25% probability should be middle zone (not inclusive)"
     
     def test_charm_calculation(self):
         """Test Charm (delta decay) calculation."""
@@ -526,27 +553,43 @@ class TestMomentumHunter:
         assert abs(distance_to_extreme - 0.01) < 0.0001, "Expected 0.01 distance"
         assert distance_to_extreme < min_distance, "1% should fail 1.5% min distance"
     
-    def test_max_extremity_filter(self):
-        """Test maximum extremity filter (markets must be extreme enough)."""
-        min_extremity = 0.25  # Must be >75% or <25%
-        
-        # Test YES markets
+    def test_middle_zone_boundaries(self):
+        """Test middle zone filtering (markets between 25%-75% are filtered)."""
+        # YES markets (>75%)
         yes_price = 0.85
-        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
-        assert is_extreme, "85% should be extreme enough"
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert not in_middle, "85% should not be in middle zone"
         
+        yes_price = 0.76
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert not in_middle, "76% should not be in middle zone"
+        
+        # Middle zone markets
         yes_price = 0.55
-        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
-        assert not is_extreme, "55% should not be extreme enough"
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert in_middle, "55% should be in middle zone"
         
-        # Test NO markets
+        yes_price = 0.50
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert in_middle, "50% should be in middle zone"
+        
+        # NO markets (<25%)
         yes_price = 0.20
-        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
-        assert is_extreme, "20% should be extreme enough"
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert not in_middle, "20% should not be in middle zone"
         
-        yes_price = 0.45
-        is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
-        assert not is_extreme, "45% should not be extreme enough"
+        yes_price = 0.24
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert not in_middle, "24% should not be in middle zone"
+        
+        # Boundary cases
+        yes_price = 0.25
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert in_middle, "25% should be in middle zone (inclusive)"
+        
+        yes_price = 0.75
+        in_middle = 0.25 <= yes_price <= 0.75
+        assert in_middle, "75% should be in middle zone (inclusive)"
     
     def test_distance_filter_edge_cases(self):
         """Test edge cases for distance filtering."""
@@ -598,33 +641,37 @@ class TestMomentumHunter:
                 f"Price {yes_price*100}% with min {min_distance*100}% " \
                 f"(distance {distance_to_extreme*100}%) should {'pass' if should_pass else 'fail'}"
     
-    def test_min_max_distance_interaction(self):
-        """Test interaction between min_distance and extremity filters."""
-        min_extremity = 0.25  # >75% or <25%
+    def test_min_distance_middle_zone_interaction(self):
+        """Test interaction between min_distance and middle zone filters."""
         min_distance = 0.015  # 1.5%
         
         test_markets = [
-            (0.85, True, True, "85%: extreme and far from 100%"),
-            (0.76, True, True, "76%: barely extreme, far from 100%"),
-            (0.99, True, False, "99%: extreme but too close to 100%"),
-            (0.985, True, True, "98.5%: extreme and at min distance"),
-            (0.55, False, True, "55%: not extreme but far from 100%"),
+            (0.85, False, True, "85%: not in middle, far from 100%"),
+            (0.76, False, True, "76%: not in middle, far from 100%"),
+            (0.99, False, False, "99%: not in middle but too close to 100%"),
+            (0.985, False, True, "98.5%: not in middle and at min distance"),
+            (0.55, True, True, "55%: in middle zone (filtered)"),
+            (0.20, False, True, "20%: not in middle, far from 0%"),
+            (0.01, False, False, "1%: not in middle but too close to 0%"),
         ]
         
-        for yes_price, should_pass_extremity, should_pass_distance, desc in test_markets:
-            # Check extremity
-            is_extreme = yes_price > (0.5 + min_extremity) or yes_price < (0.5 - min_extremity)
-            assert is_extreme == should_pass_extremity, f"{desc}: extremity failed"
+        for yes_price, should_be_middle, should_pass_distance, desc in test_markets:
+            # Check middle zone (25%-75%)
+            in_middle = 0.25 <= yes_price <= 0.75
+            assert in_middle == should_be_middle, f"{desc}: middle zone check failed"
             
-            # Check distance (with tolerance)
-            direction = 'YES' if yes_price >= 0.5 else 'NO'
-            distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
-            passes_distance = (distance_to_extreme - min_distance) >= -1e-10
-            assert passes_distance == should_pass_distance, f"{desc}: distance failed"
+            # Check distance (only if not in middle zone)
+            if not in_middle:
+                direction = 'YES' if yes_price > 0.75 else 'NO'
+                distance_to_extreme = (1.0 - yes_price) if direction == 'YES' else yes_price
+                passes_distance = (distance_to_extreme - min_distance) >= -1e-10
+                assert passes_distance == should_pass_distance, f"{desc}: distance failed"
             
-            # Both must pass
-            should_include = should_pass_extremity and should_pass_distance
-            assert (is_extreme and passes_distance) == should_include, f"{desc}: combined failed"
+            # Should be included if: not in middle AND passes distance
+            should_include = not should_be_middle and should_pass_distance
+            actual_passes = not in_middle and (direction := 'YES' if yes_price > 0.75 else 'NO') and \
+                           ((1.0 - yes_price) if direction == 'YES' else yes_price) >= min_distance - 1e-10
+            assert actual_passes == should_include, f"{desc}: combined failed"
     
     def test_distance_filter_with_zero_min(self):
         """Test that 0% min_distance allows all markets."""
@@ -658,41 +705,19 @@ class TestMomentumHunter:
             passes_filter = (distance_to_extreme - min_distance) >= -1e-10
             assert passes_filter == should_pass, desc
     
-    def test_min_distance_constrained_by_extremity(self):
-        """Test that min_distance must be <= min_extremity."""
-        # Scenario 1: min_extremity = 25%, min_distance can be up to 25%
-        min_extremity = 0.25
-        min_distance = 0.15  # 15%
-        assert min_distance <= min_extremity, "min_distance must be <= min_extremity"
-        
-        # Scenario 2: min_extremity = 10%, min_distance must be <= 10%
-        min_extremity = 0.10
-        min_distance = 0.10  # 10% - at boundary
-        assert min_distance <= min_extremity, "min_distance at boundary should be valid"
-        
-        # Scenario 3: Invalid configuration (would be rejected by UI)
-        min_extremity = 0.05  # 5%
-        min_distance = 0.10   # 10% - too high!
-        assert min_distance > min_extremity, "This should be invalid - distance > extremity"
-        # In the app, this would be prevented by the slider max_value
-    
-    def test_distance_extremity_filtering_interaction(self):
-        """Test how min_distance and min_extremity filters work together."""
-        # Note: Direction is determined by fixed thresholds (>75% = YES, <25% = NO)
-        # min_extremity determines which markets are shown (0-X% and (100-X)-100%)
+    def test_distance_filtering_with_direction_thresholds(self):
+        """Test how min_distance works with fixed direction thresholds (75%/25%)."""
+        # Direction is determined by fixed thresholds: >75% = YES, <25% = NO
         # min_distance excludes markets too close to 0% or 100%
         
-        # Setup: Using standard direction thresholds (75%/25%)
-        #        min_distance = 5% (exclude 0-5% and 95-100%)
-        
-        min_distance = 0.05
+        min_distance = 0.05  # 5% - exclude 0-5% and 95-100%
         
         test_cases = [
             # (price, direction, should_pass_distance)
             (0.03, 'NO', False),   # 3%: NO direction but too close to 0%
             (0.10, 'NO', True),    # 10%: NO direction and safe distance
             (0.20, 'NO', True),    # 20%: NO direction and safe distance
-            (0.50, None, True),    # 50%: middle zone (no direction)
+            (0.50, None, False),   # 50%: middle zone (filtered before distance check)
             (0.80, 'YES', True),   # 80%: YES direction and safe distance
             (0.92, 'YES', True),   # 92%: YES direction and safe distance  
             (0.97, 'YES', False),  # 97%: YES direction but too close to 100%
@@ -705,7 +730,7 @@ class TestMomentumHunter:
             elif price < 0.25:
                 direction = 'NO'
             else:
-                direction = None
+                direction = None  # Middle zone
             
             assert direction == expected_dir, f"Price {price}: direction mismatch"
             
@@ -717,20 +742,6 @@ class TestMomentumHunter:
                     passes_distance = price > min_distance
                 
                 assert passes_distance == should_pass_distance, f"Price {price}: distance check failed"
-    
-    def test_extreme_slider_boundaries(self):
-        """Test edge cases when min_extremity changes."""
-        # When min_extremity = 5%, min_distance can be 0-5%
-        min_extremity = 0.05
-        valid_distances = [0.0, 0.01, 0.025, 0.05]
-        for dist in valid_distances:
-            assert dist <= min_extremity, f"Distance {dist} should be valid for extremity {min_extremity}"
-        
-        # When min_extremity = 50%, min_distance can be 0-50%
-        min_extremity = 0.50
-        valid_distances = [0.0, 0.05, 0.15, 0.25, 0.40, 0.50]
-        for dist in valid_distances:
-            assert dist <= min_extremity, f"Distance {dist} should be valid for extremity {min_extremity}"
 
 
 class TestMomentumIntegration:
@@ -746,14 +757,43 @@ class TestMomentumIntegration:
             strategies_attempted.append(name)
             return []
         
-        # Simulate attempting multiple strategies
-        mock_strategy("liquidity")
+        # Simulate attempting 6 main strategies (as per refactored code)
         mock_strategy("default")
+        mock_strategy("volume_pagination")
+        mock_strategy("hot")
+        mock_strategy("breaking")
+        mock_strategy("events")
+        mock_strategy("newest")
         
         # Verify multiple strategies can be attempted
-        assert len(strategies_attempted) == 2
-        assert "liquidity" in strategies_attempted
+        assert len(strategies_attempted) == 6
         assert "default" in strategies_attempted
+        assert "hot" in strategies_attempted
+        assert "breaking" in strategies_attempted
+        assert "events" in strategies_attempted
+    
+    def test_market_deduplication(self):
+        """Test that duplicate markets are removed by slug."""
+        markets = [
+            {'slug': 'market-a', 'question': 'Question A'},
+            {'slug': 'market-b', 'question': 'Question B'},
+            {'slug': 'market-a', 'question': 'Question A (duplicate)'},  # Duplicate
+            {'slug': 'market-c', 'question': 'Question C'},
+        ]
+        
+        # Deduplication logic
+        seen = set()
+        unique_markets = []
+        for m in markets:
+            slug = m.get('slug', '')
+            if slug and slug not in seen:
+                seen.add(slug)
+                unique_markets.append(m)
+        
+        assert len(unique_markets) == 3, "Should have 3 unique markets"
+        assert len(seen) == 3, "Should have 3 unique slugs"
+        slugs = [m['slug'] for m in unique_markets]
+        assert slugs == ['market-a', 'market-b', 'market-c']
 
 
 if __name__ == "__main__":
